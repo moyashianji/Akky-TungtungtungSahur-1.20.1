@@ -5,6 +5,7 @@ import com.tungsahur.mod.entity.projectiles.TungBatProjectile;
 import com.tungsahur.mod.items.ModItems;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -84,7 +85,6 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.goalSelector.addGoal(3, new TungSahurClimbGoal(this));
         this.goalSelector.addGoal(4, new TungSahurWatchPlayerGoal(this, 1.0D, 32.0F));
         this.goalSelector.addGoal(5, new RandomStrollGoal(this, 0.8D));
-        this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
 
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
@@ -351,12 +351,42 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             evolveToStage(getEvolutionStage());
         }
 
-        // バットを持たせる
+        // バットを手に持たせる
         this.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(ModItems.TUNG_SAHUR_BAT.get()));
+
+        // バットのドロップ確率を設定（低確率）
+        this.setDropChance(EquipmentSlot.MAINHAND, 0.1F);
+
+        // 進化段階に応じてバットの見た目を強化
+        ItemStack batStack = this.getMainHandItem();
+        enhanceBatForEvolution(batStack, getEvolutionStage());
 
         return super.finalizeSpawn(world, difficulty, spawnType, spawnData, tag);
     }
+    /**
+     * 進化段階に応じてバットを強化
+     */
+    private void enhanceBatForEvolution(ItemStack batStack, int evolutionStage) {
+        if (!batStack.hasTag()) {
+            batStack.getOrCreateTag();
+        }
 
+        // 進化段階をバットに記録
+        batStack.getTag().putInt("TungSahurStage", evolutionStage);
+
+        // 段階に応じた特殊効果
+        switch (evolutionStage) {
+            case 1 -> {
+                batStack.getTag().putBoolean("Bloodstained", true);
+                batStack.getTag().putInt("KillCount", 10); // 血痕レベル1
+            }
+            case 2 -> {
+                batStack.getTag().putBoolean("Cursed", true);
+                batStack.getTag().putInt("KillCount", 25); // 血痕レベル2.5
+                batStack.getTag().putBoolean("DarkEnergy", true);
+            }
+        }
+    }
     // GeckoLib アニメーション
     @Override
     public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
@@ -396,5 +426,301 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     @Override
     public AnimatableInstanceCache getAnimatableInstanceCache() {
         return this.geoCache;
+    }
+
+    /**
+     * 攻撃時のバット演出強化
+     */
+    @Override
+    public boolean doHurtTarget(Entity target) {
+        boolean result = super.doHurtTarget(target);
+
+        if (result && !this.level().isClientSide) {
+            // バット攻撃時の特殊演出
+            performBatAttackEffects(target);
+
+            // バットにキル数を追加
+            ItemStack batStack = this.getMainHandItem();
+            if (batStack.getItem() == ModItems.TUNG_SAHUR_BAT.get()) {
+                incrementBatKillCount(batStack);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * バット攻撃時の特殊演出
+     */
+    private void performBatAttackEffects(Entity target) {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            // バットからの衝撃波
+            spawnBatImpactParticles(serverLevel, target);
+
+            // 進化段階に応じた追加効果
+            int stage = getEvolutionStage();
+            switch (stage) {
+                case 1 -> spawnStage2BatEffects(serverLevel, target);
+                case 2 -> spawnStage3BatEffects(serverLevel, target);
+            }
+
+            // バット専用攻撃音
+            serverLevel.playSound(null, this.blockPosition(),
+                    SoundEvents.WOOD_HIT, SoundSource.HOSTILE, 1.0F, 0.8F);
+            serverLevel.playSound(null, this.blockPosition(),
+                    SoundEvents.PLAYER_ATTACK_CRIT, SoundSource.HOSTILE, 0.8F, 1.2F);
+        }
+    }
+
+    /**
+     * バット衝撃時のパーティクル
+     */
+    private void spawnBatImpactParticles(ServerLevel serverLevel, Entity target) {
+        // バットの位置を計算
+        double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batY = this.getY() + 1.5;
+
+        // バットからの衝撃パーティクル
+        for (int i = 0; i < 15; i++) {
+            double angle = i * Math.PI / 7.5;
+            double velocityX = Math.cos(angle) * 0.8;
+            double velocityZ = Math.sin(angle) * 0.8;
+
+            serverLevel.sendParticles(ParticleTypes.CRIT,
+                    batX, batY, batZ, 1, velocityX, 0.3, velocityZ, 0.1);
+            serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
+                    batX, batY, batZ, 1, velocityX * 0.5, 0.2, velocityZ * 0.5, 0.0);
+        }
+
+        // ターゲットへの直撃パーティクル
+        for (int i = 0; i < 10; i++) {
+            double offsetX = (serverLevel.random.nextDouble() - 0.5) * 1.0;
+            double offsetY = serverLevel.random.nextDouble() * target.getBbHeight();
+            double offsetZ = (serverLevel.random.nextDouble() - 0.5) * 1.0;
+
+            serverLevel.sendParticles(ParticleTypes.DAMAGE_INDICATOR,
+                    target.getX() + offsetX, target.getY() + offsetY, target.getZ() + offsetZ,
+                    1, 0.0, 0.2, 0.0, 0.0);
+        }
+    }
+
+    /**
+     * ステージ2バット効果
+     */
+    private void spawnStage2BatEffects(ServerLevel serverLevel, Entity target) {
+        double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batY = this.getY() + 1.5;
+
+        // 血の飛散パーティクル
+        for (int i = 0; i < 20; i++) {
+            double velocityX = (serverLevel.random.nextDouble() - 0.5) * 1.2;
+            double velocityY = serverLevel.random.nextDouble() * 0.8 + 0.2;
+            double velocityZ = (serverLevel.random.nextDouble() - 0.5) * 1.2;
+
+            serverLevel.sendParticles(ParticleTypes.ITEM_SNOWBALL,
+                    batX, batY, batZ, 1, velocityX, velocityY, velocityZ, 0.1);
+        }
+
+        // 暗黒エネルギーの放出
+        for (int i = 0; i < 8; i++) {
+            double angle = i * Math.PI / 4;
+            double x = batX + Math.cos(angle) * 1.5;
+            double z = batZ + Math.sin(angle) * 1.5;
+
+            serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                    x, batY, z, 1, 0.0, 0.3, 0.0, 0.0);
+        }
+    }
+
+    /**
+     * ステージ3バット効果
+     */
+    private void spawnStage3BatEffects(ServerLevel serverLevel, Entity target) {
+        double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batY = this.getY() + 1.5;
+
+        // 呪いの爆発
+        serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+                batX, batY, batZ, 3, 0.5, 0.5, 0.5, 0.0);
+
+        // 暗黒の稲妻
+        for (int i = 0; i < 12; i++) {
+            double offsetX = (serverLevel.random.nextDouble() - 0.5) * 2.0;
+            double offsetY = serverLevel.random.nextDouble() * 3.0;
+            double offsetZ = (serverLevel.random.nextDouble() - 0.5) * 2.0;
+
+            serverLevel.sendParticles(ParticleTypes.ELECTRIC_SPARK,
+                    batX + offsetX, batY + offsetY, batZ + offsetZ,
+                    1, 0.0, 0.0, 0.0, 0.3);
+        }
+
+        // 呪いのオーラ拡散
+        for (int ring = 1; ring <= 4; ring++) {
+            for (int i = 0; i < 8; i++) {
+                double angle = i * Math.PI / 4;
+                double radius = ring * 1.2;
+                double x = batX + Math.cos(angle) * radius;
+                double z = batZ + Math.sin(angle) * radius;
+                double y = batY + ring * 0.2;
+
+                serverLevel.sendParticles(ParticleTypes.SCULK_SOUL,
+                        x, y, z, 1, 0.0, 0.1, 0.0, 0.0);
+            }
+        }
+
+        // 最終段階の恐怖音
+        serverLevel.playSound(null, this.blockPosition(),
+                SoundEvents.WITHER_SHOOT, SoundSource.HOSTILE, 1.0F, 0.6F);
+    }
+
+    /**
+     * バットのキル数増加
+     */
+    private void incrementBatKillCount(ItemStack batStack) {
+        if (!batStack.hasTag()) {
+            batStack.getOrCreateTag();
+        }
+        int currentKills = batStack.getTag().getInt("KillCount");
+        batStack.getTag().putInt("KillCount", currentKills + 1);
+
+        // 一定キル数で特殊効果
+        if (currentKills > 0 && currentKills % 5 == 0) {
+            spawnBatEvolutionParticles();
+        }
+    }
+
+    /**
+     * バット進化時のパーティクル
+     */
+    private void spawnBatEvolutionParticles() {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+            double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+            double batY = this.getY() + 1.5;
+
+            // バットが強化される演出
+            for (int i = 0; i < 20; i++) {
+                double angle = i * Math.PI / 10;
+                double radius = 2.0;
+                double x = batX + Math.cos(angle) * radius;
+                double z = batZ + Math.sin(angle) * radius;
+                double y = batY + Math.sin(angle * 2) * 0.5;
+
+                serverLevel.sendParticles(ParticleTypes.TOTEM_OF_UNDYING,
+                        x, y, z, 1, 0.0, 0.2, 0.0, 0.0);
+            }
+
+            // 強化音
+            serverLevel.playSound(null, this.blockPosition(),
+                    SoundEvents.TOTEM_USE, SoundSource.HOSTILE, 0.5F, 1.5F);
+        }
+    }
+
+    /**
+     * 投擲攻撃時のバット放出演出
+     */
+    public void performStylishThrowAttack(LivingEntity target) {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            // バットを投げる前の演出
+            spawnThrowPreparationParticles(serverLevel);
+        }
+
+        // 実際の投擲攻撃
+        this.performThrowAttack(target);
+
+        if (this.level() instanceof ServerLevel serverLevel) {
+            // バット投擲後の演出
+            spawnThrowReleaseParticles(serverLevel);
+        }
+    }
+
+    /**
+     * 投擲準備のパーティクル
+     */
+    private void spawnThrowPreparationParticles(ServerLevel serverLevel) {
+        double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batY = this.getY() + 1.5;
+
+        // バット周りの充電エネルギー
+        for (int i = 0; i < 15; i++) {
+            double angle = i * Math.PI / 7.5;
+            double radius = 1.0 + Math.sin(this.tickCount * 0.3) * 0.3;
+            double x = batX + Math.cos(angle) * radius;
+            double z = batZ + Math.sin(angle) * radius;
+
+            serverLevel.sendParticles(ParticleTypes.ENCHANT,
+                    x, batY, z, 1, (batX - x) * 0.1, 0.0, (batZ - z) * 0.1, 0.0);
+        }
+    }
+
+    /**
+     * 投擲放出のパーティクル
+     */
+    private void spawnThrowReleaseParticles(ServerLevel serverLevel) {
+        double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batY = this.getY() + 1.5;
+
+        // 放出時の爆発
+        serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+                batX, batY, batZ, 1, 0.0, 0.0, 0.0, 0.0);
+
+        // エネルギー放出
+        for (int i = 0; i < 10; i++) {
+            double velocityX = (serverLevel.random.nextDouble() - 0.5) * 0.5;
+            double velocityY = serverLevel.random.nextDouble() * 0.3;
+            double velocityZ = (serverLevel.random.nextDouble() - 0.5) * 0.5;
+
+            serverLevel.sendParticles(ParticleTypes.SOUL,
+                    batX, batY, batZ, 1, velocityX, velocityY, velocityZ, 0.0);
+        }
+    }
+
+    /**
+     * 常時バット周りのオーラ
+     */
+    public void updateBatAura() {
+        if (this.level() instanceof ServerLevel serverLevel && this.tickCount % 10 == 0) {
+            ItemStack batStack = this.getMainHandItem();
+            if (batStack.getItem() == ModItems.TUNG_SAHUR_BAT.get()) {
+                spawnBatAuraParticles(serverLevel, batStack);
+            }
+        }
+    }
+
+    /**
+     * バットオーラのパーティクル
+     */
+    private void spawnBatAuraParticles(ServerLevel serverLevel, ItemStack batStack) {
+        double batX = this.getX() + Math.sin(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batZ = this.getZ() + Math.cos(Math.toRadians(-this.getYRot() + 90)) * 0.8;
+        double batY = this.getY() + 1.5;
+
+        // 基本オーラ
+        for (int i = 0; i < 2; i++) {
+            double angle = this.tickCount * 0.1 + i * Math.PI;
+            double radius = 0.5;
+            double x = batX + Math.cos(angle) * radius;
+            double z = batZ + Math.sin(angle) * radius;
+
+            serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                    x, batY, z, 1, 0.0, 0.05, 0.0, 0.0);
+        }
+
+        // 進化段階に応じた追加オーラ
+        if (batStack.hasTag()) {
+            boolean cursed = batStack.getTag().getBoolean("Cursed");
+            boolean darkEnergy = batStack.getTag().getBoolean("DarkEnergy");
+
+            if (cursed || darkEnergy) {
+                // 暗黒エネルギーのオーラ
+                serverLevel.sendParticles(ParticleTypes.SCULK_SOUL,
+                        batX, batY, batZ, 1, 0.0, 0.0, 0.0, 0.0);
+            }
+        }
     }
 }

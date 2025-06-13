@@ -35,7 +35,7 @@ import org.slf4j.Logger;
 @Mod(TungSahurMod.MODID)
 public class TungSahurMod {
     public static final String MODID = "tungsahurmod";
-    private static final Logger LOGGER = LogUtils.getLogger();
+    public static final Logger LOGGER = LogUtils.getLogger();
 
     // Creative Mode Tab
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
