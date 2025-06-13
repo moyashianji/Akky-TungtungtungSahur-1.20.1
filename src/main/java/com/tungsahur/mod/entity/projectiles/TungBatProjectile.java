@@ -45,12 +45,11 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         super.onHit(result);
 
         if (!this.level().isClientSide) {
-            // パーティクル効果
-            this.level().addParticle(new ItemParticleOption(ParticleTypes.ITEM, new ItemStack(getDefaultItem())),
-                    this.getX(), this.getY(), this.getZ(), 0.0, 0.0, 0.0);
-
             // 着弾音
             this.playSound(SoundEvents.WOOD_HIT, 1.0F, 1.0F);
+
+            // パーティクル効果（サーバー側で実行）
+            spawnHitParticles();
 
             if (result.getType() == HitResult.Type.ENTITY) {
                 EntityHitResult entityHit = (EntityHitResult) result;
@@ -58,7 +57,8 @@ public class TungBatProjectile extends ThrowableItemProjectile {
 
                 if (entity instanceof LivingEntity livingEntity && this.getOwner() instanceof TungSahurEntity) {
                     // ダメージを与える
-                    livingEntity.hurt(this.damageSources().thrown(this, this.getOwner()), 8.0F);
+                    float damage = 8.0F;
+                    livingEntity.hurt(this.damageSources().thrown(this, this.getOwner()), damage);
 
                     // 恐怖効果を追加
                     livingEntity.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 60, 1));
@@ -78,12 +78,40 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         }
     }
 
+    private void spawnHitParticles() {
+        if (!this.level().isClientSide) {
+            ItemStack batStack = new ItemStack(getDefaultItem());
+
+            // 破壊パーティクル
+            for (int i = 0; i < 8; ++i) {
+                double velocityX = (this.random.nextFloat() - 0.5D) * 0.08D;
+                double velocityY = (this.random.nextFloat() - 0.5D) * 0.08D;
+                double velocityZ = (this.random.nextFloat() - 0.5D) * 0.08D;
+
+                this.level().addParticle(new ItemParticleOption(ParticleTypes.ITEM, batStack),
+                        this.getX(), this.getY(), this.getZ(),
+                        velocityX, velocityY, velocityZ);
+            }
+
+            // 煙パーティクル
+            for (int i = 0; i < 5; i++) {
+                double x = this.getX() + (this.random.nextDouble() - 0.5) * 2.0;
+                double y = this.getY() + this.random.nextDouble();
+                double z = this.getZ() + (this.random.nextDouble() - 0.5) * 2.0;
+
+                this.level().addParticle(ParticleTypes.SMOKE,
+                        x, y, z, 0.0, 0.1, 0.0);
+            }
+        }
+    }
+
     @Override
     public void handleEntityEvent(byte event) {
         if (event == 3) {
-            // 破壊時のパーティクル
+            // クライアント側での破壊パーティクル
             for (int i = 0; i < 8; ++i) {
-                this.level().addParticle(new ItemParticleOption(ParticleTypes.ITEM, new ItemStack(getDefaultItem())),
+                ItemStack batStack = new ItemStack(getDefaultItem());
+                this.level().addParticle(new ItemParticleOption(ParticleTypes.ITEM, batStack),
                         this.getX(), this.getY(), this.getZ(),
                         ((double) this.random.nextFloat() - 0.5D) * 0.08D,
                         ((double) this.random.nextFloat() - 0.5D) * 0.08D,
@@ -106,13 +134,27 @@ public class TungBatProjectile extends ThrowableItemProjectile {
     public void tick() {
         super.tick();
 
-        // 回転効果
-        this.setYRot(this.getYRot() + 20.0F);
-        this.setXRot(this.getXRot() + 20.0F);
-
         // 一定時間後に消滅
-        if (this.tickCount > 200) {
-            this.discard();
+        if (this.tickCount > 200) { // 10秒
+            if (!this.level().isClientSide) {
+                this.discard();
+            }
         }
+    }
+
+    @Override
+    public boolean shouldRenderAtSqrDistance(double distance) {
+        // レンダリング距離を制限
+        return distance < 4096.0D; // 64ブロック
+    }
+
+    @Override
+    public boolean isPickable() {
+        return false;
+    }
+
+    @Override
+    public boolean hurt(net.minecraft.world.damagesource.DamageSource damageSource, float amount) {
+        return false; // 投擲物はダメージを受けない
     }
 }

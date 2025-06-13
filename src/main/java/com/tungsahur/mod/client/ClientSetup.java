@@ -1,6 +1,7 @@
 package com.tungsahur.mod.client;
 
 import com.tungsahur.mod.TungSahurMod;
+import com.tungsahur.mod.client.renderer.TungBatProjectileRenderer;
 import com.tungsahur.mod.client.renderer.TungSahurRenderer;
 import com.tungsahur.mod.entity.ModEntities;
 import net.minecraft.client.renderer.entity.EntityRenderers;
@@ -17,6 +18,9 @@ public class ClientSetup {
         event.enqueueWork(() -> {
             // エンティティレンダラー登録
             EntityRenderers.register(ModEntities.TUNG_SAHUR.get(), TungSahurRenderer::new);
+            // 投擲物レンダラー登録（カスタムレンダラー使用）
+            EntityRenderers.register(ModEntities.TUNG_BAT_PROJECTILE.get(), TungBatProjectileRenderer::new);
+
         });
     }
 }
