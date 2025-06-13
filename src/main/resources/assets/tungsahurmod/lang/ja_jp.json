@@ -1,0 +1,25 @@
+{
+  "entity.tungsahurmod.tung_sahur": "Tung Tung Tung Sahur",
+  "item.tungsahurmod.tung_sahur_bat": "Tung Sahurバット",
+  "item.tungsahurmod.tung_sahur_spawn_egg": "Tung Sahurのスポーンエッグ",
+  "itemGroup.tung_sahur_tab": "Tung Sahur",
+
+  "tungsahur.command.status": "Tung Sahurゲーム状態",
+  "tungsahur.command.reset": "ゲームリセット完了",
+  "tungsahur.command.setday": "日数設定完了",
+  "tungsahur.command.start": "恐怖の始まり...",
+  "tungsahur.command.stop": "ゲーム停止",
+
+  "tungsahur.day.1": "1日目",
+  "tungsahur.day.2": "2日目",
+  "tungsahur.day.3": "3日目",
+
+  "tungsahur.sleep.blocked.1": "何かが見ている...",
+  "tungsahur.sleep.blocked.2": "なんか嫌な夢を見そうな気がする",
+  "tungsahur.sleep.blocked.3": "太鼓の音が聞こえる...",
+  "tungsahur.sleep.blocked.4": "眠ってはいけない...",
+  "tungsahur.sleep.blocked.5": "彼がやってくる...",
+  "tungsahur.sleep.blocked.6": "Tung... Tung... Tung...",
+  "tungsahur.sleep.blocked.7": "安全ではない...",
+  "tungsahur.sleep.blocked.8": "夜はまだ終わらない"
+}

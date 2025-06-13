@@ -1,0 +1,7 @@
+
+{
+  "parent": "item/handheld",
+  "textures": {
+    "layer0": "tungsahurmod:item/tung_sahur_bat"
+  }
+}

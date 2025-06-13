@@ -1,0 +1,25 @@
+{
+  "entity.tungsahurmod.tung_sahur": "Tung Tung Tung Sahur",
+  "item.tungsahurmod.tung_sahur_bat": "Tung Sahur Bat",
+  "item.tungsahurmod.tung_sahur_spawn_egg": "Tung Sahur Spawn Egg",
+  "itemGroup.tung_sahur_tab": "Tung Sahur",
+
+  "tungsahur.command.status": "Tung Sahur Game Status",
+  "tungsahur.command.reset": "Game Reset Complete",
+  "tungsahur.command.setday": "Day Set Complete",
+  "tungsahur.command.start": "The horror begins...",
+  "tungsahur.command.stop": "Game Stopped",
+
+  "tungsahur.day.1": "Day 1",
+  "tungsahur.day.2": "Day 2",
+  "tungsahur.day.3": "Day 3",
+
+  "tungsahur.sleep.blocked.1": "Something is watching...",
+  "tungsahur.sleep.blocked.2": "I feel like I'm going to have a bad dream",
+  "tungsahur.sleep.blocked.3": "I hear drum sounds...",
+  "tungsahur.sleep.blocked.4": "You must not sleep...",
+  "tungsahur.sleep.blocked.5": "He is coming...",
+  "tungsahur.sleep.blocked.6": "Tung... Tung... Tung...",
+  "tungsahur.sleep.blocked.7": "Not safe...",
+  "tungsahur.sleep.blocked.8": "The night is not over yet"
+}
