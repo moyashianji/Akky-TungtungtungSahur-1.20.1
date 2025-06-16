@@ -1,5 +1,4 @@
-// TungSahurEntity.java の修正版 - バット表示を確実にする
-
+// TungSahurEntity.java - バット表示完全修正版
 package com.tungsahur.mod.entity;
 
 import com.tungsahur.mod.entity.goals.*;
@@ -45,11 +44,12 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private static final EntityDataAccessor<Integer> EVOLUTION_STAGE = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.INT);
     private static final EntityDataAccessor<Float> SCALE_FACTOR = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.FLOAT);
     private static final EntityDataAccessor<Boolean> IS_BEING_WATCHED = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Boolean> HAS_BAT_EQUIPPED = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
 
     // アニメーション定義
-    protected static final RawAnimation IDLE_ANIM = RawAnimation.begin().thenLoop("animation.tung_sahur.idle");
+    protected static final RawAnimation IDLE_ANIM = RawAnimation.begin().thenLoop("idle");
     protected static final RawAnimation WALK_ANIM = RawAnimation.begin().thenLoop("animation.tung_sahur.walk");
-    protected static final RawAnimation ATTACK_ANIM = RawAnimation.begin().thenPlay("animation.tung_sahur.attack");
+    protected static final RawAnimation ATTACK_ANIM = RawAnimation.begin().thenPlay("animation.tung_sahur.punch_right");
     protected static final RawAnimation DRUM_ANIM = RawAnimation.begin().thenPlay("animation.tung_sahur.drum");
     protected static final RawAnimation THROW_ANIM = RawAnimation.begin().thenPlay("animation.tung_sahur.throw");
     protected static final RawAnimation CLIMB_ANIM = RawAnimation.begin().thenLoop("animation.tung_sahur.climb");
@@ -68,12 +68,18 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private Vec3 lastPosition = Vec3.ZERO;
     private boolean isStuck = false;
 
-    // バット装備確認用
+    // バット装備確認用（重要！）
     private int batCheckTimer = 0;
+    private boolean forceEquipNext = false;
 
     public TungSahurEntity(EntityType<? extends Monster> entityType, Level level) {
         super(entityType, level);
         this.xpReward = 15;
+
+        // 初期装備設定をコンストラクタで確実に行う
+        if (!level.isClientSide) {
+            this.forceEquipNext = true;
+        }
     }
 
     public static AttributeSupplier createAttributes() {
@@ -109,6 +115,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.entityData.define(EVOLUTION_STAGE, 0);
         this.entityData.define(SCALE_FACTOR, 1.0F);
         this.entityData.define(IS_BEING_WATCHED, false);
+        this.entityData.define(HAS_BAT_EQUIPPED, false);
     }
 
     @Override
@@ -116,89 +123,142 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         super.tick();
 
         if (!this.level().isClientSide) {
-            // より頻繁にバットをチェック
-            batCheckTimer++;
-            if (batCheckTimer >= 10) { // 0.5秒ごと
-                ensureBatEquipped();
-                batCheckTimer = 0;
-            }
-
-            updateEvolutionStage();
-            updatePlayerWatchStatus();
-            updateMovementSpeed();
-            updateDrumSound();
-            updateClimbingState();
-            updateStuckDetection();
+            // サーバー側での処理
+            handleServerTick();
+        } else {
+            // クライアント側での処理
+            handleClientTick();
         }
     }
 
     /**
-     * バットを確実に装備させる（改良版）
+     * サーバー側のtick処理
      */
-    private void ensureBatEquipped() {
+    private void handleServerTick() {
+        // バット装備チェック（最優先）
+        batCheckTimer++;
+        if (batCheckTimer >= 5 || forceEquipNext) { // 0.25秒ごと
+            ensureBatEquippedServer();
+            batCheckTimer = 0;
+            forceEquipNext = false;
+        }
+
+        updateEvolutionStage();
+        updatePlayerWatchStatus();
+        updateMovementSpeed();
+        updateDrumSound();
+        updateClimbingState();
+        updateStuckDetection();
+    }
+
+    /**
+     * クライアント側のtick処理
+     */
+    private void handleClientTick() {
+        // クライアント側でもバット装備を確認
+        if (this.tickCount % 20 == 0) {
+            ensureBatEquippedClient();
+        }
+    }
+
+    /**
+     * サーバー側でのバット装備確認（完全版）
+     */
+    private void ensureBatEquippedServer() {
         ItemStack mainHand = this.getMainHandItem();
+        boolean needsEquip = false;
 
         // バットが装備されていない、または間違ったアイテムの場合
         if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
-            ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
-            enhanceBatForEvolution(batStack, getEvolutionStage());
+            needsEquip = true;
+        }
+        // バットはあるが、進化段階が合わない場合
+        else if (mainHand.hasTag()) {
+            int batStage = mainHand.getTag().getInt("TungSahurStage");
+            if (batStage != getEvolutionStage()) {
+                needsEquip = true;
+            }
+        }
+
+        if (needsEquip) {
+            ItemStack batStack = createEnhancedBat(getEvolutionStage());
 
             // 装備を設定
             this.setItemSlot(EquipmentSlot.MAINHAND, batStack);
-
-            // ドロップ確率を設定
             this.setDropChance(EquipmentSlot.MAINHAND, 0.15F);
 
-            // 装備変更をクライアントに即座に同期
-            if (this.level() instanceof ServerLevel) {
-                this.level().broadcastEntityEvent(this, (byte) 55); // カスタムイベント
-            }
+            // 装備状態をデータで同期
+            this.entityData.set(HAS_BAT_EQUIPPED, true);
 
-            // デバッグログ
-            if (this.level() instanceof ServerLevel) {
-                System.out.println("TungSahur equipped bat: " + batStack.getItem().toString());
+            // 全クライアントに装備変更を通知
+            if (this.level() instanceof ServerLevel serverLevel) {
+                // カスタムパケットで装備情報を送信
+                this.refreshDimensions();
+
+                // デバッグログ
+                System.out.println("TungSahur equipped bat (Server): Stage " + getEvolutionStage());
             }
         }
     }
 
     /**
-     * 進化段階に応じてバットを強化
+     * クライアント側でのバット装備確認
      */
-    private void enhanceBatForEvolution(ItemStack batStack, int evolutionStage) {
+    private void ensureBatEquippedClient() {
+        if (!this.entityData.get(HAS_BAT_EQUIPPED)) {
+            return; // サーバーがまだ装備していない
+        }
+
+        ItemStack mainHand = this.getMainHandItem();
+
+        // クライアント側でバットが見えない場合の強制設定
+        if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
+            ItemStack batStack = createEnhancedBat(getEvolutionStage());
+            this.setItemSlot(EquipmentSlot.MAINHAND, batStack);
+
+            System.out.println("TungSahur equipped bat (Client): Stage " + getEvolutionStage());
+        }
+    }
+
+    /**
+     * 進化段階に応じた強化バットを作成
+     */
+    private ItemStack createEnhancedBat(int evolutionStage) {
+        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+
         if (!batStack.hasTag()) {
             batStack.getOrCreateTag();
         }
 
+        // 基本設定
         batStack.getTag().putInt("TungSahurStage", evolutionStage);
+        batStack.getTag().putBoolean("TungSahurOwned", true);
 
+        // 進化段階に応じた強化
         switch (evolutionStage) {
+            case 0 -> {
+                // 基本形態
+                batStack.getTag().putBoolean("BasicForm", true);
+            }
             case 1 -> {
+                // 血染め段階
                 batStack.getTag().putBoolean("Bloodstained", true);
                 batStack.getTag().putInt("KillCount", 10);
                 batStack.getTag().putInt("BloodLevel", 1);
+                batStack.getTag().putBoolean("Enhanced", true);
             }
             case 2 -> {
+                // 最終形態
                 batStack.getTag().putBoolean("Cursed", true);
                 batStack.getTag().putInt("KillCount", 25);
                 batStack.getTag().putBoolean("DarkEnergy", true);
                 batStack.getTag().putInt("BloodLevel", 3);
                 batStack.getTag().putBoolean("SoulBound", true);
+                batStack.getTag().putBoolean("FinalForm", true);
             }
         }
-    }
 
-    @Override
-    public void handleEntityEvent(byte event) {
-        super.handleEntityEvent(event);
-
-        // カスタムイベント55: 装備同期
-        if (event == 55) {
-            // クライアント側で装備を再確認
-            if (this.level().isClientSide) {
-                // 装備が正しく表示されるよう強制更新
-                this.refreshDimensions();
-            }
-        }
+        return batStack;
     }
 
     /**
@@ -255,7 +315,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             if (newStage != getEvolutionStage()) {
                 setEvolutionStage(newStage);
                 evolveToStage(newStage);
-                ensureBatEquipped(); // 進化時に確実にバット更新
+                forceEquipNext = true; // 進化時に確実にバット更新
             }
         }
     }
@@ -410,6 +470,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         tag.putFloat("ScaleFactor", getScaleFactor());
         tag.putInt("ThrowTimer", throwTimer);
         tag.putInt("AttackTimer", attackTimer);
+        tag.putBoolean("HasBatEquipped", this.entityData.get(HAS_BAT_EQUIPPED));
     }
 
     @Override
@@ -420,11 +481,8 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         throwTimer = tag.getInt("ThrowTimer");
         attackTimer = tag.getInt("AttackTimer");
 
-        // データ読み込み後に即座にバットを装備
-        if (!this.level().isClientSide) {
-            // 少し遅延させて確実に装備
-            this.level().scheduleTick(this.blockPosition(), this.level().getBlockState(this.blockPosition()).getBlock(), 1);
-        }
+        // データ読み込み後に装備を強制
+        this.forceEquipNext = true;
     }
 
     @Override
@@ -457,14 +515,9 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             evolveToStage(getEvolutionStage());
         }
 
-        // バットを確実に装備（複数回実行で確実に）
-        ensureBatEquipped();
-
-        // 少し遅延させてもう一度確認
-        if (world instanceof ServerLevel serverLevel) {
-            serverLevel.scheduleTick(this.blockPosition(),
-                    serverLevel.getBlockState(this.blockPosition()).getBlock(), 5);
-        }
+        // バットを確実に装備
+        this.forceEquipNext = true;
+        ensureBatEquippedServer();
 
         return result;
     }

@@ -1,13 +1,19 @@
+// TungSahurRenderer.java - 代替版（レンダリングレイヤーなし）
 package com.tungsahur.mod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
 import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.client.model.TungSahurModel;
 import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.items.ModItems;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.entity.ItemRenderer;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import software.bernie.geckolib.renderer.GeoEntityRenderer;
 
@@ -18,9 +24,12 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
     private static final ResourceLocation STAGE_2_TEXTURE = new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage2.png");
     private static final ResourceLocation STAGE_3_TEXTURE = new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage3.png");
 
+    private final ItemRenderer itemRenderer;
+
     public TungSahurRenderer(EntityRendererProvider.Context renderManager) {
         super(renderManager, new TungSahurModel());
         this.shadowRadius = 0.8F;
+        this.itemRenderer = Minecraft.getInstance().getItemRenderer();
     }
 
     @Override
@@ -52,7 +61,12 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
             poseStack.translate(shake, 0, shake);
         }
 
+        // エンティティ本体をレンダリング
         super.render(entity, entityYaw, partialTick, poseStack, bufferSource, packedLight);
+
+        // バットを手動でレンダリング
+        renderBatManually(entity, poseStack, bufferSource, packedLight);
+
         poseStack.popPose();
     }
 
@@ -76,6 +90,52 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
     }
 
     /**
+     * バットを手動でレンダリング
+     */
+    private void renderBatManually(TungSahurEntity entity, PoseStack poseStack,
+                                   MultiBufferSource bufferSource, int packedLight) {
+
+        ItemStack batStack = entity.getMainHandItem();
+
+        // バットが装備されていない場合は表示用バットを作成
+        if (batStack.isEmpty() || !batStack.is(ModItems.TUNG_SAHUR_BAT.get())) {
+            batStack = createDisplayBat(entity.getEvolutionStage());
+        }
+
+        poseStack.pushPose();
+
+        // 右手の位置に移動（概算）
+        float armSwing = entity.getAttackAnim(0.0F);
+        poseStack.translate(0.8, 1.5, 0.2);
+
+        // 腕の振りに合わせて回転
+        poseStack.mulPose(Axis.XP.rotationDegrees(-90F + armSwing * 30F));
+        poseStack.mulPose(Axis.YP.rotationDegrees(entity.yBodyRot));
+
+        // 進化段階に応じたサイズ調整
+        float scale = switch (entity.getEvolutionStage()) {
+            case 1 -> 1.2F;
+            case 2 -> 1.5F;
+            default -> 1.0F;
+        };
+        poseStack.scale(scale, scale, scale);
+
+        // バットをレンダリング
+        this.itemRenderer.renderStatic(
+                batStack,
+                ItemDisplayContext.THIRD_PERSON_RIGHT_HAND,
+                packedLight,
+                OverlayTexture.NO_OVERLAY,
+                poseStack,
+                bufferSource,
+                entity.level(),
+                entity.getId()
+        );
+
+        poseStack.popPose();
+    }
+
+    /**
      * 表示用バット強化
      */
     private void enhanceBatForDisplay(ItemStack batStack, int evolutionStage) {
@@ -84,6 +144,8 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
         }
 
         batStack.getTag().putInt("TungSahurStage", evolutionStage);
+        batStack.getTag().putBoolean("ForceDisplay", true);
+        batStack.getTag().putBoolean("TungSahurOwned", true);
 
         switch (evolutionStage) {
             case 1 -> {
@@ -99,6 +161,37 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
                 batStack.getTag().putBoolean("SoulBound", true);
             }
         }
+    }
+
+    /**
+     * 表示用バットを作成
+     */
+    private ItemStack createDisplayBat(int evolutionStage) {
+        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+
+        if (!batStack.hasTag()) {
+            batStack.getOrCreateTag();
+        }
+
+        batStack.getTag().putInt("TungSahurStage", evolutionStage);
+        batStack.getTag().putBoolean("ForceDisplay", true);
+        batStack.getTag().putBoolean("TungSahurOwned", true);
+        batStack.getTag().putBoolean("ForceRender", true);
+
+        switch (evolutionStage) {
+            case 1 -> {
+                batStack.getTag().putBoolean("Bloodstained", true);
+                batStack.getTag().putInt("BloodLevel", 1);
+            }
+            case 2 -> {
+                batStack.getTag().putBoolean("Cursed", true);
+                batStack.getTag().putBoolean("DarkEnergy", true);
+                batStack.getTag().putInt("BloodLevel", 3);
+                batStack.getTag().putBoolean("SoulBound", true);
+            }
+        }
+
+        return batStack;
     }
 
     @Override

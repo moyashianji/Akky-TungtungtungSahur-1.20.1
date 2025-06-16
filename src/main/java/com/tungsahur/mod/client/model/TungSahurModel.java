@@ -1,3 +1,4 @@
+// TungSahurModel.java - バット表示対応強化版
 package com.tungsahur.mod.client.model;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -26,8 +27,13 @@ public class TungSahurModel extends GeoModel<TungSahurEntity> {
 
     @Override
     public ResourceLocation getTextureResource(TungSahurEntity entity) {
-        // レンダラーでテクスチャは処理されるため、ここでは基本テクスチャを返す
-        return new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage1.png");
+        // 進化段階に応じたテクスチャを返す
+        int stage = entity.getEvolutionStage();
+        return switch (stage) {
+            case 1 -> new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage2.png");
+            case 2 -> new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage3.png");
+            default -> new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage1.png");
+        };
     }
 
     @Override
