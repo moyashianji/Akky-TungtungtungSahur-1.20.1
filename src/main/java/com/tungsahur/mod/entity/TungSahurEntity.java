@@ -6,6 +6,7 @@ import com.tungsahur.mod.entity.projectiles.TungBatProjectile;
 import com.tungsahur.mod.items.ModItems;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -31,6 +32,8 @@ import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import software.bernie.geckolib.animatable.GeoEntity;
 import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
 import software.bernie.geckolib.core.animation.*;
@@ -423,6 +426,55 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             this.level().addFreshEntity(projectile);
 
             throwTimer = 80;
+        }
+    }
+
+    /**
+     * 攻撃時にバットの威力を適用
+     */
+    @Override
+    public boolean doHurtTarget(Entity target) {
+        boolean result = super.doHurtTarget(target);
+
+        if (result && target instanceof LivingEntity livingTarget) {
+            ItemStack mainHand = this.getMainHandItem();
+
+            if (mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
+                // バットによる追加ダメージと効果
+                applyBatEffects(livingTarget, mainHand);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * バットの効果を適用
+     */
+    private void applyBatEffects(LivingEntity target, ItemStack batStack) {
+        CompoundTag tag = batStack.getTag();
+        if (tag != null) {
+            int stage = tag.getInt("TungSahurStage");
+
+            // 進化段階に応じた追加効果
+            switch (stage) {
+                case 1:
+                    // Stage 2: 短時間のスロウネス効果
+                    target.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 60, 0));
+                    break;
+                case 2:
+                    // Stage 3: スロウネスと弱体化効果
+                    target.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 100, 1));
+                    target.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 80, 0));
+                    break;
+            }
+
+            // バット使用時のパーティクル効果
+            if (this.level() instanceof ServerLevel serverLevel) {
+                serverLevel.sendParticles(ParticleTypes.CRIT,
+                        target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ(),
+                        5, 0.1, 0.1, 0.1, 0.1);
+            }
         }
     }
 
