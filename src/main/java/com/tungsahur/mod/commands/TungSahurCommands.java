@@ -104,8 +104,7 @@ public class TungSahurCommands {
                                         .executes(TungSahurCommands::getStatistics)
                                         .then(Commands.literal("events")
                                                 .executes(TungSahurCommands::getEventStatistics))
-                                        .then(Commands.literal("sleep")
-                                                .executes(TungSahurCommands::getSleepStatistics)))
+                                        )
 
                                 // テスト・デバッグ
                                 .then(Commands.literal("test")
@@ -582,15 +581,7 @@ public class TungSahurCommands {
         return 1;
     }
 
-    private static int getSleepStatistics(CommandContext<CommandSourceStack> context) {
-        BedSleepEvent.logSleepStatistics();
 
-        Component message = Component.literal("睡眠統計をコンソールに出力しました")
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, false);
-        return 1;
-    }
 
     // === テスト・デバッグコマンド ===
 
