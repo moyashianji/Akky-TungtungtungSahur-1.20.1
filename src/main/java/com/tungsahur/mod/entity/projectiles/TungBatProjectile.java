@@ -1,17 +1,22 @@
-// TungBatProjectile.java - 投擲物に軌跡パーティクル追加
+// TungBatProjectile.java - 完全対応版
 package com.tungsahur.mod.entity.projectiles;
 
+import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.entity.ModEntities;
 import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.items.ModItems;
 import net.minecraft.core.particles.ItemParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
-import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
@@ -21,20 +26,55 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.network.NetworkHooks;
 
 public class TungBatProjectile extends ThrowableItemProjectile {
 
+    // データアクセサー
+    private static final EntityDataAccessor<Integer> THROWER_DAY_NUMBER =
+            SynchedEntityData.defineId(TungBatProjectile.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Boolean> IS_HOMING =
+            SynchedEntityData.defineId(TungBatProjectile.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Float> DAMAGE_MULTIPLIER =
+            SynchedEntityData.defineId(TungBatProjectile.class, EntityDataSerializers.FLOAT);
+
+    // 飛行時間とホーミング設定
+    private int maxLifetime = 100; // 5秒
+    private LivingEntity homingTarget;
+    private int homingStartDelay = 10; // 0.5秒後からホーミング開始
+    private float homingStrength = 0.05F;
+
     public TungBatProjectile(EntityType<? extends TungBatProjectile> entityType, Level level) {
         super(entityType, level);
+        this.setNoGravity(false); // 重力の影響を受ける
     }
 
     public TungBatProjectile(Level level, LivingEntity shooter) {
         super(ModEntities.TUNG_BAT_PROJECTILE.get(), shooter, level);
+
+        if (shooter instanceof TungSahurEntity tungSahur) {
+            this.setThrowerDayNumber(tungSahur.getDayNumber());
+            this.setDamageMultiplier(calculateDamageMultiplier(tungSahur.getDayNumber()));
+            this.maxLifetime = calculateLifetime(tungSahur.getDayNumber());
+
+            // 3日目のバットはホーミング機能付き
+            if (tungSahur.getDayNumber() >= 3) {
+                this.setHoming(true);
+                this.homingTarget = tungSahur.getTarget();
+                this.homingStrength = 0.08F;
+            }
+        }
+
+        this.setNoGravity(getThrowerDayNumber() >= 2); // 2日目以降は重力無効
     }
 
-    public TungBatProjectile(Level level, double x, double y, double z) {
-        super(ModEntities.TUNG_BAT_PROJECTILE.get(), x, y, z, level);
+    @Override
+    protected void defineSynchedData() {
+        super.defineSynchedData();
+        this.entityData.define(THROWER_DAY_NUMBER, 1);
+        this.entityData.define(IS_HOMING, false);
+        this.entityData.define(DAMAGE_MULTIPLIER, 1.0F);
     }
 
     @Override
@@ -46,237 +86,354 @@ public class TungBatProjectile extends ThrowableItemProjectile {
     public void tick() {
         super.tick();
 
-        // 飛行中の軌跡パーティクル
-        if (!this.level().isClientSide) {
-            spawnTrailParticles();
+        // 生存時間チェック
+        if (this.tickCount > maxLifetime) {
+            onExpire();
+            return;
         }
 
-        // 一定時間後に消滅
-        if (this.tickCount > 200) { // 10秒
-            if (!this.level().isClientSide) {
-                this.discard();
-            }
+        // ホーミング処理
+        if (isHoming() && this.tickCount > homingStartDelay && this.homingTarget != null) {
+            performHoming();
+        }
+
+        // パーティクル軌跡
+        spawnTrailParticles();
+
+        // 飛行音（定期的に）
+        if (this.tickCount % 8 == 0) {
+            playFlightSound();
+        }
+
+        // 回転エフェクト更新
+        updateRotationEffect();
+    }
+
+    private void performHoming() {
+        if (this.homingTarget == null || !this.homingTarget.isAlive()) {
+            this.setHoming(false);
+            return;
+        }
+
+        Vec3 currentVelocity = this.getDeltaMovement();
+        Vec3 targetDirection = this.homingTarget.getEyePosition().subtract(this.position()).normalize();
+
+        // 現在の速度を維持しつつ、ターゲット方向に徐々に向かう
+        Vec3 newVelocity = currentVelocity.lerp(targetDirection.scale(currentVelocity.length()), this.homingStrength);
+        this.setDeltaMovement(newVelocity);
+
+        // ホーミング中のパーティクル
+        if (this.level() instanceof ServerLevel serverLevel && this.tickCount % 3 == 0) {
+            serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
+                    this.getX(), this.getY(), this.getZ(),
+                    1, 0.1, 0.1, 0.1, 0.02);
         }
     }
 
     private void spawnTrailParticles() {
-        if (level() instanceof ServerLevel serverLevel) {
-            // 火の軌跡
-            serverLevel.sendParticles(ParticleTypes.FLAME,
-                    this.getX(), this.getY(), this.getZ(),
-                    2, 0.1, 0.1, 0.1, 0.02);
+        if (this.level().isClientSide) {
+            // クライアント側パーティクル
+            spawnClientTrailParticles();
+        } else if (this.level() instanceof ServerLevel serverLevel && this.tickCount % 2 == 0) {
+            // サーバー側パーティクル
+            spawnServerTrailParticles(serverLevel);
+        }
+    }
 
-            // 煙の軌跡
+    private void spawnClientTrailParticles() {
+        RandomSource random = this.level().getRandom();
+
+        // 基本軌跡パーティクル
+        for (int i = 0; i < 2; i++) {
+            double offsetX = (random.nextDouble() - 0.5) * 0.2;
+            double offsetY = (random.nextDouble() - 0.5) * 0.2;
+            double offsetZ = (random.nextDouble() - 0.5) * 0.2;
+
+            this.level().addParticle(ParticleTypes.CRIT,
+                    this.getX() + offsetX, this.getY() + offsetY, this.getZ() + offsetZ,
+                    0, 0, 0);
+        }
+
+        // 日数に応じた特別なパーティクル
+        switch (getThrowerDayNumber()) {
+            case 2:
+                if (random.nextFloat() < 0.3F) {
+                    this.level().addParticle(ParticleTypes.FLAME,
+                            this.getX(), this.getY(), this.getZ(),
+                            0, 0, 0);
+                }
+                break;
+
+            case 3:
+                if (random.nextFloat() < 0.4F) {
+                    this.level().addParticle(ParticleTypes.SOUL_FIRE_FLAME,
+                            this.getX(), this.getY(), this.getZ(),
+                            0, 0, 0);
+                }
+                if (isHoming() && random.nextFloat() < 0.2F) {
+                    this.level().addParticle(ParticleTypes.WITCH,
+                            this.getX(), this.getY(), this.getZ(),
+                            0, 0, 0);
+                }
+                break;
+        }
+    }
+
+    private void spawnServerTrailParticles(ServerLevel serverLevel) {
+        // バットアイテムの破片パーティクル
+        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        ItemParticleOption itemParticle = new ItemParticleOption(ParticleTypes.ITEM, batStack);
+
+        serverLevel.sendParticles(itemParticle,
+                this.getX(), this.getY(), this.getZ(),
+                1, 0.1, 0.1, 0.1, 0.02);
+
+        // 速度に応じた煙パーティクル
+        float speed = (float) this.getDeltaMovement().length();
+        if (speed > 0.5F) {
             serverLevel.sendParticles(ParticleTypes.SMOKE,
                     this.getX(), this.getY(), this.getZ(),
-                    1, 0.05, 0.05, 0.05, 0.01);
+                    1, 0.1, 0.1, 0.1, 0.01);
+        }
+    }
 
-            // 暗黒エネルギーの軌跡
-            serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                    this.getX(), this.getY(), this.getZ(),
-                    1, 0.0, 0.0, 0.0, 0.0);
+    private void playFlightSound() {
+        float pitch = 0.8F + (float) this.getDeltaMovement().length() * 0.4F;
+        float volume = 0.3F + getThrowerDayNumber() * 0.1F;
 
-            // 回転に合わせたスパーク
-            if (this.tickCount % 3 == 0) {
-                double angle = this.tickCount * 0.5;
-                double offsetX = Math.cos(angle) * 0.3;
-                double offsetZ = Math.sin(angle) * 0.3;
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.ARROW_SHOOT, SoundSource.HOSTILE,
+                volume, pitch);
+    }
 
-                serverLevel.sendParticles(ParticleTypes.CRIT,
-                        this.getX() + offsetX, this.getY(), this.getZ() + offsetZ,
-                        1, 0.0, 0.0, 0.0, 0.1);
-            }
+    private void updateRotationEffect() {
+        // 回転エフェクトの更新（レンダラーで使用）
+        // 実際の回転計算はクライアント側のレンダラーで処理
+    }
 
-            // 速度が高い時の追加パーティクル
-            double speed = this.getDeltaMovement().length();
-            if (speed > 0.5) {
-                for (int i = 0; i < 3; i++) {
-                    double trailX = this.getX() - this.getDeltaMovement().x * i * 0.3;
-                    double trailY = this.getY() - this.getDeltaMovement().y * i * 0.3;
-                    double trailZ = this.getZ() - this.getDeltaMovement().z * i * 0.3;
+    @Override
+    protected void onHitEntity(EntityHitResult result) {
+        Entity hitEntity = result.getEntity();
 
-                    serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
-                            trailX, trailY, trailZ, 1, 0.0, 0.0, 0.0, 0.0);
-                }
+        if (hitEntity instanceof LivingEntity livingEntity && hitEntity != this.getOwner()) {
+            // ダメージ計算
+            float damage = calculateDamage();
+
+            // ダメージ適用
+            boolean hitSuccessful = livingEntity.hurt(this.damageSources().thrown(this, this.getOwner()), damage);
+
+            if (hitSuccessful) {
+                // 日数に応じた特殊効果
+                applyDaySpecificEffects(livingEntity);
+
+                // ノックバック効果
+                applyKnockback(livingEntity);
+
+                // ヒット時のパーティクルとサウンド
+                spawnHitEffects(livingEntity);
+
+                TungSahurMod.LOGGER.debug("TungBatProjectile ヒット: {} に {}ダメージ",
+                        hitEntity.getClass().getSimpleName(), damage);
             }
         }
+
+        super.onHitEntity(result);
     }
 
     @Override
     protected void onHit(HitResult result) {
         super.onHit(result);
 
-        if (!this.level().isClientSide) {
-            // 着弾音
-            this.playSound(SoundEvents.WOOD_HIT, 1.0F, 1.0F);
-            this.playSound(SoundEvents.GENERIC_EXPLODE, 0.5F, 1.5F);
+        // ヒット時の爆発パーティクル
+        if (this.level() instanceof ServerLevel serverLevel) {
+            spawnImpactParticles(serverLevel, result.getLocation());
+        }
 
-            // 着弾パーティクル効果
-            spawnImpactParticles();
+        // ヒット音
+        float pitch = 1.0F + (getThrowerDayNumber() - 1) * 0.2F;
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.ITEM_BREAK, SoundSource.HOSTILE,
+                0.8F, pitch);
 
-            if (result.getType() == HitResult.Type.ENTITY) {
-                EntityHitResult entityHit = (EntityHitResult) result;
-                Entity entity = entityHit.getEntity();
+        // プロジェクタイル削除
+        this.discard();
+    }
 
-                if (entity instanceof LivingEntity livingEntity && this.getOwner() instanceof TungSahurEntity) {
-                    // ダメージを与える
-                    float damage = 8.0F;
-                    livingEntity.hurt(this.damageSources().thrown(this, this.getOwner()), damage);
+    private float calculateDamage() {
+        float baseDamage = switch (getThrowerDayNumber()) {
+            case 1 -> 4.0F;
+            case 2 -> 6.0F;
+            case 3 -> 8.0F;
+            default -> 4.0F;
+        };
 
-                    // 恐怖効果を追加
-                    livingEntity.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 60, 1));
-                    livingEntity.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 100, 2));
-                    livingEntity.addEffect(new MobEffectInstance(MobEffects.CONFUSION, 80, 1));
+        return baseDamage * getDamageMultiplier();
+    }
 
-                    // ノックバック
-                    if (this.getOwner() != null) {
-                        double dx = this.getOwner().getX() - livingEntity.getX();
-                        double dz = this.getOwner().getZ() - livingEntity.getZ();
-                        livingEntity.knockback(1.5F, dx, dz);
-                    }
+    private void applyDaySpecificEffects(LivingEntity target) {
+        // プレイヤーには効果を付与しない（要求仕様）
+        if (target instanceof net.minecraft.world.entity.player.Player) {
+            return;
+        }
 
-                    // エンティティヒット時の追加パーティクル
-                    spawnEntityHitParticles(livingEntity);
-                }
-            }
+        switch (getThrowerDayNumber()) {
+            case 2:
+                // 2日目：軽いスロウネス
+                target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
+                        net.minecraft.world.effect.MobEffects.MOVEMENT_SLOWDOWN, 60, 0));
+                break;
 
-            this.discard();
+            case 3:
+                // 3日目：より強力な効果
+                target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
+                        net.minecraft.world.effect.MobEffects.MOVEMENT_SLOWDOWN, 80, 1));
+                target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
+                        net.minecraft.world.effect.MobEffects.WEAKNESS, 60, 0));
+                break;
         }
     }
 
-    private void spawnImpactParticles() {
-        if (level() instanceof ServerLevel serverLevel) {
-            ItemStack batStack = new ItemStack(getDefaultItem());
+    private void applyKnockback(LivingEntity target) {
+        Vec3 direction = target.position().subtract(this.position()).normalize();
+        float knockbackStrength = 0.3F + (getThrowerDayNumber() * 0.2F);
 
-            // 中心爆発
-            serverLevel.sendParticles(ParticleTypes.EXPLOSION,
-                    this.getX(), this.getY(), this.getZ(), 2, 0.3, 0.3, 0.3, 0.0);
+        Vec3 knockback = direction.scale(knockbackStrength);
+        target.setDeltaMovement(target.getDeltaMovement().add(
+                knockback.x, Math.max(0.1D, knockback.y * 0.5D), knockback.z));
+        target.hurtMarked = true;
+    }
 
-            // 破壊パーティクル
-            for (int i = 0; i < 15; ++i) {
-                double velocityX = (this.random.nextFloat() - 0.5D) * 0.3D;
-                double velocityY = this.random.nextFloat() * 0.4D + 0.1D;
-                double velocityZ = (this.random.nextFloat() - 0.5D) * 0.3D;
+    private void spawnHitEffects(LivingEntity target) {
+        if (!(this.level() instanceof ServerLevel serverLevel)) return;
 
-                serverLevel.sendParticles(new ItemParticleOption(ParticleTypes.ITEM, batStack),
-                        this.getX(), this.getY(), this.getZ(),
-                        1, velocityX, velocityY, velocityZ, 0.1);
-            }
+        Vec3 hitPos = target.position().add(0, target.getBbHeight() * 0.5, 0);
 
-            // 放射状の火花
-            for (int i = 0; i < 12; i++) {
-                double angle = i * Math.PI / 6;
-                double velocityX = Math.cos(angle) * 0.6;
-                double velocityZ = Math.sin(angle) * 0.6;
+        // 基本ヒットパーティクル
+        serverLevel.sendParticles(ParticleTypes.CRIT,
+                hitPos.x, hitPos.y, hitPos.z,
+                5, 0.2, 0.2, 0.2, 0.1);
 
-                serverLevel.sendParticles(ParticleTypes.FLAME,
-                        this.getX(), this.getY(), this.getZ(),
-                        1, velocityX, 0.3, velocityZ, 0.1);
-                serverLevel.sendParticles(ParticleTypes.CRIT,
-                        this.getX(), this.getY(), this.getZ(),
-                        1, velocityX * 0.5, 0.2, velocityZ * 0.5, 0.0);
-            }
-
-            // 煙の雲
-            for (int i = 0; i < 10; i++) {
-                double x = this.getX() + (this.random.nextDouble() - 0.5) * 2.0;
-                double y = this.getY() + this.random.nextDouble();
-                double z = this.getZ() + (this.random.nextDouble() - 0.5) * 2.0;
-
-                serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE,
-                        x, y, z, 1, 0.0, 0.2, 0.0, 0.05);
-            }
-
-            // 地面のクラック風パーティクル
-            for (int i = 0; i < 8; i++) {
-                double angle = i * Math.PI / 4;
-                double x = this.getX() + Math.cos(angle) * 1.5;
-                double z = this.getZ() + Math.sin(angle) * 1.5;
-
+        // 日数に応じた特別なパーティクル
+        switch (getThrowerDayNumber()) {
+            case 2:
                 serverLevel.sendParticles(ParticleTypes.LAVA,
-                        x, this.getY(), z, 1, 0.0, 0.0, 0.0, 0.0);
-            }
+                        hitPos.x, hitPos.y, hitPos.z,
+                        2, 0.1, 0.1, 0.1, 0.05);
+                break;
+
+            case 3:
+                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                        hitPos.x, hitPos.y, hitPos.z,
+                        3, 0.2, 0.2, 0.2, 0.08);
+
+                if (isHoming()) {
+                    serverLevel.sendParticles(ParticleTypes.END_ROD,
+                            hitPos.x, hitPos.y, hitPos.z,
+                            2, 0.1, 0.1, 0.1, 0.02);
+                }
+                break;
         }
     }
 
-    private void spawnEntityHitParticles(LivingEntity target) {
-        if (level() instanceof ServerLevel serverLevel) {
-            // 血しぶき風パーティクル
-            for (int i = 0; i < 20; i++) {
-                double velocityX = (serverLevel.random.nextDouble() - 0.5) * 0.8;
-                double velocityY = serverLevel.random.nextDouble() * 0.8 + 0.2;
-                double velocityZ = (serverLevel.random.nextDouble() - 0.5) * 0.8;
+    private void spawnImpactParticles(ServerLevel serverLevel, Vec3 impactPos) {
+        // 衝撃パーティクル
+        serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+                impactPos.x, impactPos.y, impactPos.z,
+                1, 0.0, 0.0, 0.0, 0.0);
 
-                serverLevel.sendParticles(ParticleTypes.DAMAGE_INDICATOR,
-                        target.getX(), target.getY() + target.getBbHeight() * 0.7, target.getZ(),
-                        1, velocityX, velocityY, velocityZ, 0.0);
-            }
+        // バットの破片
+        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        ItemParticleOption itemParticle = new ItemParticleOption(ParticleTypes.ITEM, batStack);
 
-            // ターゲット周りの衝撃波
-            for (int ring = 1; ring <= 3; ring++) {
-                for (int i = 0; i < 8; i++) {
-                    double angle = i * Math.PI / 4;
-                    double radius = ring * 0.5;
-                    double x = target.getX() + Math.cos(angle) * radius;
-                    double z = target.getZ() + Math.sin(angle) * radius;
+        serverLevel.sendParticles(itemParticle,
+                impactPos.x, impactPos.y, impactPos.z,
+                8, 0.3, 0.3, 0.3, 0.1);
+    }
 
-                    serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
-                            x, target.getY() + 0.5, z, 1, 0.0, 0.1, 0.0, 0.0);
-                }
-            }
-
-            // 暗黒エネルギーの爆発
-            for (int i = 0; i < 15; i++) {
-                double offsetX = (serverLevel.random.nextDouble() - 0.5) * 1.0;
-                double offsetY = serverLevel.random.nextDouble() * 2.0;
-                double offsetZ = (serverLevel.random.nextDouble() - 0.5) * 1.0;
-
-                serverLevel.sendParticles(ParticleTypes.SOUL,
-                        target.getX() + offsetX, target.getY() + offsetY, target.getZ() + offsetZ,
-                        1, 0.0, 0.3, 0.0, 0.0);
-            }
+    private void onExpire() {
+        // 時間切れ時の処理
+        if (this.level() instanceof ServerLevel serverLevel) {
+            spawnExpireEffects(serverLevel);
         }
+
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.ITEM_BREAK, SoundSource.HOSTILE,
+                0.5F, 1.5F);
+
+        this.discard();
+    }
+
+    private void spawnExpireEffects(ServerLevel serverLevel) {
+        // 消失時のパーティクル
+        serverLevel.sendParticles(ParticleTypes.POOF,
+                this.getX(), this.getY(), this.getZ(),
+                5, 0.2, 0.2, 0.2, 0.05);
+    }
+
+    private float calculateDamageMultiplier(int dayNumber) {
+        return switch (dayNumber) {
+            case 1 -> 1.0F;
+            case 2 -> 1.3F;
+            case 3 -> 1.6F;
+            default -> 1.0F;
+        };
+    }
+
+    private int calculateLifetime(int dayNumber) {
+        return switch (dayNumber) {
+            case 1 -> 80;  // 4秒
+            case 2 -> 100; // 5秒
+            case 3 -> 120; // 6秒
+            default -> 80;
+        };
+    }
+
+    // ゲッター・セッター
+    public int getThrowerDayNumber() {
+        return this.entityData.get(THROWER_DAY_NUMBER);
+    }
+
+    public void setThrowerDayNumber(int dayNumber) {
+        this.entityData.set(THROWER_DAY_NUMBER, dayNumber);
+    }
+
+    public boolean isHoming() {
+        return this.entityData.get(IS_HOMING);
+    }
+
+    public void setHoming(boolean homing) {
+        this.entityData.set(IS_HOMING, homing);
+    }
+
+    public float getDamageMultiplier() {
+        return this.entityData.get(DAMAGE_MULTIPLIER);
+    }
+
+    public void setDamageMultiplier(float multiplier) {
+        this.entityData.set(DAMAGE_MULTIPLIER, multiplier);
+    }
+
+    // NBT保存
+    @Override
+    public void addAdditionalSaveData(CompoundTag tag) {
+        super.addAdditionalSaveData(tag);
+        tag.putInt("ThrowerDayNumber", getThrowerDayNumber());
+        tag.putBoolean("IsHoming", isHoming());
+        tag.putFloat("DamageMultiplier", getDamageMultiplier());
+        tag.putInt("MaxLifetime", maxLifetime);
     }
 
     @Override
-    public void handleEntityEvent(byte event) {
-        if (event == 3) {
-            // クライアント側での破壊パーティクル
-            for (int i = 0; i < 8; ++i) {
-                ItemStack batStack = new ItemStack(getDefaultItem());
-                this.level().addParticle(new ItemParticleOption(ParticleTypes.ITEM, batStack),
-                        this.getX(), this.getY(), this.getZ(),
-                        ((double) this.random.nextFloat() - 0.5D) * 0.08D,
-                        ((double) this.random.nextFloat() - 0.5D) * 0.08D,
-                        ((double) this.random.nextFloat() - 0.5D) * 0.08D);
-            }
-        }
+    public void readAdditionalSaveData(CompoundTag tag) {
+        super.readAdditionalSaveData(tag);
+        setThrowerDayNumber(tag.getInt("ThrowerDayNumber"));
+        setHoming(tag.getBoolean("IsHoming"));
+        setDamageMultiplier(tag.getFloat("DamageMultiplier"));
+        maxLifetime = tag.getInt("MaxLifetime");
     }
 
     @Override
     public Packet<ClientGamePacketListener> getAddEntityPacket() {
         return NetworkHooks.getEntitySpawningPacket(this);
     }
-
-    @Override
-    protected float getGravity() {
-        return 0.03F;
-    }
-
-    @Override
-    public boolean shouldRenderAtSqrDistance(double distance) {
-        return distance < 4096.0D; // 64ブロック
-    }
-
-    @Override
-    public boolean isPickable() {
-        return false;
-    }
-
-    @Override
-    public boolean hurt(net.minecraft.world.damagesource.DamageSource damageSource, float amount) {
-        return false; // 投擲物はダメージを受けない
-    }
 }
-
-

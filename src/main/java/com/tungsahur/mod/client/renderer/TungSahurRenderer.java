@@ -1,4 +1,4 @@
-// TungSahurRenderer.java - スケール対応完全修正版
+// TungSahurRenderer.java - 完全対応版
 package com.tungsahur.mod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -8,6 +8,7 @@ import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.items.ModItems;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.InteractionHand;
@@ -38,8 +39,8 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
 
         // デバッグ情報をログに出力（100tick毎）
         if (entity.tickCount % 100 == 0) {
-            TungSahurMod.LOGGER.debug("TungSahurレンダリング中: Stage={}, Scale={}, 影サイズ={}",
-                    entity.getEvolutionStage(), scaleFactor, this.shadowRadius);
+            TungSahurMod.LOGGER.debug("TungSahurレンダリング中: Day={}, Scale={}, 影サイズ={}",
+                    entity.getDayNumber(), scaleFactor, this.shadowRadius);
         }
 
         // 親クラスのレンダリング実行
@@ -55,10 +56,10 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
         ItemStack mainHand = entity.getMainHandItem();
         ItemStack offHand = entity.getOffhandItem();
 
-        // メインハンドにバットがない場合、進化段階に応じたバットを装備
+        // メインハンドにバットがない場合、日数に応じたバットを装備
         if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
-            ItemStack evolutionBat = createEvolutionBat(entity.getEvolutionStage());
-            entity.setItemInHand(InteractionHand.MAIN_HAND, evolutionBat);
+            ItemStack dayBat = createDayBat(entity.getDayNumber());
+            entity.setItemInHand(InteractionHand.MAIN_HAND, dayBat);
         }
 
         // オフハンドは常に空にする（バット2本持ち防止）
@@ -68,60 +69,81 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
     }
 
     /**
-     * 進化段階に応じたバットアイテムを作成
+     * 日数に応じたバットアイテムを作成
      */
-    private ItemStack createEvolutionBat(int evolutionStage) {
+    private ItemStack createDayBat(int dayNumber) {
         ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
         CompoundTag tag = batStack.getOrCreateTag();
 
         // 基本タグ設定
-        tag.putInt("EvolutionStage", evolutionStage);
+        tag.putInt("DayNumber", dayNumber);
         tag.putBoolean("EntityBat", true);
-        tag.putString("CustomModelData", "tung_sahur_bat_stage" + evolutionStage);
+        tag.putString("CustomModelData", "tungsahur_day_" + dayNumber);
+        tag.putBoolean("Unbreakable", true); // エンティティ用バットは壊れない
 
-        // 進化段階に応じた強化
-        switch (evolutionStage) {
-            case 0 -> { // 1日目
-                tag.putInt("Damage", 8);
-                tag.putString("BatType", "Basic");
-                tag.putInt("CustomModelData", 100);
-            }
-            case 1 -> { // 2日目
-                tag.putInt("Damage", 15);
-                tag.putString("BatType", "Enhanced");
-                tag.putInt("BloodLevel", 1);
-                tag.putInt("CustomModelData", 101);
-            }
-            case 2 -> { // 3日目以降
-                tag.putInt("Damage", 25);
-                tag.putString("BatType", "Legendary");
-                tag.putBoolean("Cursed", true);
-                tag.putInt("BloodLevel", 3);
-                tag.putInt("Enchantment", 1);
-                tag.putInt("CustomModelData", 102);
-            }
+        // 日数に応じた見た目調整
+        switch (dayNumber) {
+            case 1:
+                tag.putString("DisplayName", "TungSahur's Bat (Day 1)");
+                tag.putInt("HideFlags", 63); // すべてのフラグを非表示
+                break;
+            case 2:
+                tag.putString("DisplayName", "TungSahur's Enhanced Bat (Day 2)");
+                tag.putInt("HideFlags", 63);
+                tag.putBoolean("Enchanted", true); // 光る効果
+                break;
+            case 3:
+                tag.putString("DisplayName", "TungSahur's Ultimate Bat (Day 3)");
+                tag.putInt("HideFlags", 63);
+                tag.putBoolean("Enchanted", true);
+                tag.putInt("CustomModelData", 999); // 特別なモデル
+                break;
         }
 
         return batStack;
     }
 
     @Override
-    protected float getDeathMaxRotation(TungSahurEntity entityLivingBaseIn) {
-        return 0.0F; // 死亡時の回転を無効
+    public ResourceLocation getTextureLocation(TungSahurEntity entity) {
+        // モデルクラスにテクスチャ選択を委譲
+        return ((TungSahurModel) this.model).getTextureResource(entity);
     }
+
+
 
     /**
-     * 死亡時にもバットを表示し続ける
+     * エンティティの明るさ調整
      */
     @Override
-    public ResourceLocation getTextureLocation(TungSahurEntity entity) {
-        // デバッグ用：テクスチャパスをログに出力（初回のみ）
-        ResourceLocation texture = super.getTextureLocation(entity);
-        if (entity.tickCount == 1) {
-            TungSahurMod.LOGGER.info("使用中のテクスチャ: {} (Stage: {})", texture, entity.getEvolutionStage());
-        }
-        return texture;
+    protected int getBlockLightLevel(TungSahurEntity entity, BlockPos pos) {
+        // 日数が高いほど暗闇でも少し明るく見える
+        int baseLightLevel = super.getBlockLightLevel(entity, pos);
+        int dayBonus = entity.getDayNumber() - 1; // 0, 1, 2のボーナス
+
+        return Math.min(15, baseLightLevel + dayBonus);
     }
 
 
+
+
+    /**
+     * パフォーマンス最適化のための可視性チェック
+     */
+    @Override
+    public boolean shouldRender(TungSahurEntity entity, net.minecraft.client.renderer.culling.Frustum frustum,
+                                double x, double y, double z) {
+        // 基本の可視性チェック
+        if (!super.shouldRender(entity, frustum, x, y, z)) {
+            return false;
+        }
+
+        // 距離による詳細度調整
+        double distanceSquared = entity.distanceToSqr(x, y, z);
+        if (distanceSquared > 1024.0D) { // 32ブロック以上
+            // 遠距離では簡略化されたレンダリング
+            return entity.tickCount % 3 == 0; // 3フレームに1回のみ更新
+        }
+
+        return true;
+    }
 }

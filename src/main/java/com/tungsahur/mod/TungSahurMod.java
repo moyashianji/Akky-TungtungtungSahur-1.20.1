@@ -107,4 +107,69 @@ public class TungSahurMod {
             LOGGER.info("Tung Sahur クライアントセットアップ完了");
         }
     }
+
+    /**
+     * デバッグモードの状態を確認するメソッド
+     * 開発環境やシステムプロパティで制御可能
+     */
+    public static boolean isDebugMode() {
+        // システムプロパティでデバッグモードを制御
+        String debugProperty = System.getProperty("tungsahur.debug");
+        if ("true".equals(debugProperty)) {
+            return true;
+        }
+
+        // 開発環境の場合はデバッグモード
+        boolean isDevelopment = !net.minecraftforge.fml.loading.FMLEnvironment.production;
+        if (isDevelopment) {
+            return true;
+        }
+
+        // ログレベルがDEBUG以下の場合
+        try {
+            org.apache.logging.log4j.Level currentLevel = ((org.apache.logging.log4j.core.Logger) LOGGER).getLevel();
+            if (currentLevel != null && currentLevel.isLessSpecificThan(org.apache.logging.log4j.Level.DEBUG)) {
+                return true;
+            }
+        } catch (Exception e) {
+            // ログレベル取得に失敗した場合は無視
+        }
+
+        return false;
+    }
+
+    /**
+     * デバッグモードを強制的に有効/無効にするメソッド（開発時用）
+     */
+    public static void setDebugMode(boolean enabled) {
+        System.setProperty("tungsahur.debug", String.valueOf(enabled));
+        LOGGER.info("TungSahur デバッグモード: {}", enabled ? "有効" : "無効");
+    }
+
+    /**
+     * デバッグ情報を出力するメソッド
+     */
+    public static void logDebugInfo(String message, Object... args) {
+        if (isDebugMode()) {
+            LOGGER.debug("[DEBUG] " + message, args);
+        }
+    }
+
+    /**
+     * 警告レベルのデバッグ情報を出力するメソッド
+     */
+    public static void logDebugWarn(String message, Object... args) {
+        if (isDebugMode()) {
+            LOGGER.warn("[DEBUG-WARN] " + message, args);
+        }
+    }
+
+    /**
+     * エラーレベルのデバッグ情報を出力するメソッド
+     */
+    public static void logDebugError(String message, Throwable throwable) {
+        if (isDebugMode()) {
+            LOGGER.error("[DEBUG-ERROR] " + message, throwable);
+        }
+    }
 }

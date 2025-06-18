@@ -1,4 +1,4 @@
-// ClientSetup.java - 完全修正版
+// ClientSetup.java - 完全対応版
 package com.tungsahur.mod.client;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -25,19 +25,28 @@ public class ClientSetup {
         event.enqueueWork(() -> {
             TungSahurMod.LOGGER.info("TungSahur クライアントセットアップ開始");
 
-            // エンティティレンダラー登録
-            registerEntityRenderers();
+            try {
+                // エンティティレンダラー登録
+                registerEntityRenderers();
 
-            // アイテムプロパティ登録（バット表示強化）
-            registerEnhancedItemProperties();
+                // アイテムプロパティ登録（バット表示強化）
+                registerEnhancedItemProperties();
 
-            // TungSahur専用バットプロパティ登録
-            registerTungSahurBatProperties();
+                // TungSahur専用バットプロパティ登録
+                registerTungSahurBatProperties();
 
-            // 強制表示プロパティ追加
-            registerForceDisplayProperties();
+                // 日数別バットプロパティ登録
+                registerDaySpecificProperties();
 
-            TungSahurMod.LOGGER.info("TungSahur クライアントセットアップ完了 - バット表示強化");
+                // デバッグ用プロパティ登録
+                registerDebugProperties();
+
+                TungSahurMod.LOGGER.info("TungSahur クライアントセットアップ完了 - 全機能対応");
+
+            } catch (Exception e) {
+                TungSahurMod.LOGGER.error("クライアントセットアップ中にエラー発生: ", e);
+                throw new RuntimeException("TungSahur クライアントセットアップ失敗", e);
+            }
         });
     }
 
@@ -46,17 +55,18 @@ public class ClientSetup {
      */
     private static void registerEntityRenderers() {
         try {
-            // Tung Sahurエンティティレンダラー（バット表示レイヤー付き）
+            // Tung Sahurエンティティレンダラー（日数対応版）
             EntityRenderers.register(ModEntities.TUNG_SAHUR.get(), TungSahurRenderer::new);
             TungSahurMod.LOGGER.info("TungSahurRenderer正常に登録されました");
 
-            // Tung Batプロジェクタイルレンダラー
+            // Tung Batプロジェクタイルレンダラー（強化版）
             EntityRenderers.register(ModEntities.TUNG_BAT_PROJECTILE.get(), TungBatProjectileRenderer::new);
             TungSahurMod.LOGGER.info("TungBatProjectileRenderer正常に登録されました");
 
             TungSahurMod.LOGGER.debug("エンティティレンダラー登録完了");
         } catch (Exception e) {
             TungSahurMod.LOGGER.error("エンティティレンダラー登録中にエラー発生: ", e);
+            throw e;
         }
     }
 
@@ -80,120 +90,186 @@ public class ClientSetup {
                         return 0.5F;
                     });
 
+            // バットの使用状態プロパティ
+            ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
+                    new ResourceLocation(TungSahurMod.MODID, "in_use"),
+                    (itemStack, clientLevel, livingEntity, seed) -> {
+                        if (livingEntity instanceof com.tungsahur.mod.entity.TungSahurEntity tungSahur) {
+                            if (tungSahur.isCurrentlyAttacking()) return 1.0F;
+                            if (tungSahur.isCurrentlyThrowing()) return 0.8F;
+                            if (tungSahur.isCurrentlyJumping()) return 0.6F;
+                        }
+                        return 0.0F;
+                    });
+
             TungSahurMod.LOGGER.debug("基本アイテムプロパティ登録完了");
         } catch (Exception e) {
             TungSahurMod.LOGGER.error("アイテムプロパティ登録中にエラー発生: ", e);
+            throw e;
         }
     }
 
     /**
-     * TungSahur専用バットプロパティ登録
+     * TungSahur専用バットプロパティの登録
      */
     private static void registerTungSahurBatProperties() {
         try {
-            // 強制表示プロパティ
+            // エンティティバット識別プロパティ
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
-                    new ResourceLocation(TungSahurMod.MODID, "force_display"),
+                    new ResourceLocation(TungSahurMod.MODID, "entity_bat"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
-                        if (itemStack.hasTag()) {
-                            boolean forceDisplay = itemStack.getTag().getBoolean("ForceDisplay");
-                            if (forceDisplay) return 1.0F;
-                        }
-
-                        // TungSahurエンティティの場合は常に表示
-                        if (livingEntity instanceof com.tungsahur.mod.entity.TungSahurEntity) {
+                        if (itemStack.hasTag() && itemStack.getTag().getBoolean("EntityBat")) {
                             return 1.0F;
                         }
-
                         return 0.0F;
                     });
 
-            // 可視性強化プロパティ
+            // 耐久度表示プロパティ
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
-                    new ResourceLocation(TungSahurMod.MODID, "visibility_enhanced"),
+                    new ResourceLocation(TungSahurMod.MODID, "durability"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
-                        if (livingEntity instanceof com.tungsahur.mod.entity.TungSahurEntity tungSahur) {
-                            // TungSahurの進化段階に応じて可視性を強化
-                            int stage = tungSahur.getEvolutionStage();
-                            return 0.5F + (stage * 0.25F); // 0.5, 0.75, 1.0
+                        if (itemStack.hasTag() && itemStack.getTag().getBoolean("Unbreakable")) {
+                            return 1.0F; // 無限耐久
                         }
-                        return 0.0F;
+                        return itemStack.getDamageValue() / (float) itemStack.getMaxDamage();
+                    });
+
+            // エンチャント光沢プロパティ
+            ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
+                    new ResourceLocation(TungSahurMod.MODID, "enchanted"),
+                    (itemStack, clientLevel, livingEntity, seed) -> {
+                        if (itemStack.hasTag() && itemStack.getTag().getBoolean("Enchanted")) {
+                            return 1.0F;
+                        }
+                        return itemStack.isEnchanted() ? 1.0F : 0.0F;
                     });
 
             TungSahurMod.LOGGER.debug("TungSahur専用バットプロパティ登録完了");
         } catch (Exception e) {
-            TungSahurMod.LOGGER.error("TungSahur専用プロパティ登録中にエラー発生: ", e);
+            TungSahurMod.LOGGER.error("TungSahurバットプロパティ登録中にエラー発生: ", e);
+            throw e;
         }
     }
 
     /**
-     * 強制表示プロパティの追加
+     * 日数別バットプロパティの登録
      */
-    private static void registerForceDisplayProperties() {
+    private static void registerDaySpecificProperties() {
         try {
-            // 強制レンダリングプロパティ
+            // 日数プロパティ
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
-                    new ResourceLocation(TungSahurMod.MODID, "force_render"),
+                    new ResourceLocation(TungSahurMod.MODID, "day_number"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
                         if (itemStack.hasTag()) {
-                            boolean forceRender = itemStack.getTag().getBoolean("ForceRender");
-                            boolean alwaysVisible = itemStack.getTag().getBoolean("AlwaysVisible");
-                            boolean tungSahurOwned = itemStack.getTag().getBoolean("TungSahurOwned");
-
-                            if (tungSahurOwned || forceRender || alwaysVisible) {
-                                return 1.0F;
-                            }
+                            int dayNumber = itemStack.getTag().getInt("DayNumber");
+                            return dayNumber / 10.0F; // 0.1, 0.2, 0.3として返す
                         }
-                        return 0.0F;
+
+                        // エンティティから日数を取得
+                        if (livingEntity instanceof com.tungsahur.mod.entity.TungSahurEntity tungSahur) {
+                            return tungSahur.getDayNumber() / 10.0F;
+                        }
+
+                        return 0.1F; // デフォルトは1日目
                     });
 
-            // 装備状態プロパティ
+            // 1日目専用プロパティ
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
-                    new ResourceLocation(TungSahurMod.MODID, "equipped"),
+                    new ResourceLocation(TungSahurMod.MODID, "day_1"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
-                        if (livingEntity != null) {
-                            ItemStack mainHand = livingEntity.getMainHandItem();
-                            ItemStack offHand = livingEntity.getOffhandItem();
-
-                            return (mainHand == itemStack || offHand == itemStack) ? 1.0F : 0.0F;
-                        }
-                        return 0.0F;
+                        int dayNumber = getDayNumberFromItem(itemStack, livingEntity);
+                        return dayNumber == 1 ? 1.0F : 0.0F;
                     });
 
-            // レンダリング優先度プロパティ
+            // 2日目専用プロパティ
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
-                    new ResourceLocation(TungSahurMod.MODID, "render_priority"),
+                    new ResourceLocation(TungSahurMod.MODID, "day_2"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
-                        if (itemStack.hasTag()) {
-                            boolean tungSahurOwned = itemStack.getTag().getBoolean("TungSahurOwned");
-                            boolean forceRender = itemStack.getTag().getBoolean("ForceRender");
-                            boolean alwaysVisible = itemStack.getTag().getBoolean("AlwaysVisible");
-
-                            // 複数の条件で高優先度を設定
-                            int priority = 0;
-                            if (tungSahurOwned) priority += 3;
-                            if (forceRender) priority += 2;
-                            if (alwaysVisible) priority += 1;
-
-                            return Math.min(priority / 6.0F, 1.0F);
-                        }
-                        return 0.0F;
+                        int dayNumber = getDayNumberFromItem(itemStack, livingEntity);
+                        return dayNumber == 2 ? 1.0F : 0.0F;
                     });
 
-            // デバッグ用プロパティ
+            // 3日目専用プロパティ
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
-                    new ResourceLocation(TungSahurMod.MODID, "debug_info"),
+                    new ResourceLocation(TungSahurMod.MODID, "day_3"),
+                    (itemStack, clientLevel, livingEntity, seed) -> {
+                        int dayNumber = getDayNumberFromItem(itemStack, livingEntity);
+                        return dayNumber == 3 ? 1.0F : 0.0F;
+                    });
+
+            TungSahurMod.LOGGER.debug("日数別バットプロパティ登録完了");
+        } catch (Exception e) {
+            TungSahurMod.LOGGER.error("日数別バットプロパティ登録中にエラー発生: ", e);
+            throw e;
+        }
+    }
+
+    /**
+     * デバッグ用プロパティの登録
+     */
+    private static void registerDebugProperties() {
+        try {
+            // デバッグモード表示プロパティ
+            ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
+                    new ResourceLocation(TungSahurMod.MODID, "debug_mode"),
+                    (itemStack, clientLevel, livingEntity, seed) -> {
+                        return TungSahurMod.isDebugMode() ? 1.0F : 0.0F;
+                    });
+
+            // エンティティ状態表示プロパティ
+            ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
+                    new ResourceLocation(TungSahurMod.MODID, "entity_state"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
                         if (livingEntity instanceof com.tungsahur.mod.entity.TungSahurEntity tungSahur) {
-                            // デバッグ情報として進化段階を10で割った値を返す
-                            return tungSahur.getEvolutionStage() / 10.0F;
+                            // 状態を数値化して返す
+                            if (tungSahur.isCurrentlyAttacking()) return 0.8F;
+                            if (tungSahur.isCurrentlyThrowing()) return 0.6F;
+                            if (tungSahur.isCurrentlyJumping()) return 0.4F;
+                            if (tungSahur.isWallClimbing()) return 0.2F;
+                            return 0.1F; // idle状態
                         }
                         return 0.0F;
                     });
 
-            TungSahurMod.LOGGER.debug("強制表示プロパティ登録完了");
+            TungSahurMod.LOGGER.debug("デバッグ用プロパティ登録完了");
         } catch (Exception e) {
-            TungSahurMod.LOGGER.error("強制表示プロパティ登録中にエラー発生: ", e);
+            TungSahurMod.LOGGER.error("デバッグ用プロパティ登録中にエラー発生: ", e);
+            // デバッグプロパティのエラーは致命的ではないので続行
+            TungSahurMod.LOGGER.warn("デバッグ用プロパティの一部が登録されませんでした");
         }
+    }
+
+    /**
+     * アイテムまたはエンティティから日数を取得するヘルパーメソッド
+     */
+    private static int getDayNumberFromItem(ItemStack itemStack, LivingEntity livingEntity) {
+        // アイテムタグから取得
+        if (itemStack.hasTag()) {
+            int dayNumber = itemStack.getTag().getInt("DayNumber");
+            if (dayNumber > 0) {
+                return dayNumber;
+            }
+        }
+
+        // エンティティから取得
+        if (livingEntity instanceof com.tungsahur.mod.entity.TungSahurEntity tungSahur) {
+            return tungSahur.getDayNumber();
+        }
+
+        // デフォルト
+        return 1;
+    }
+
+
+
+    /**
+     * レンダリング統計情報の出力
+     */
+    public static void logRenderingStats() {
+        TungSahurMod.LOGGER.info("=== TungSahur レンダリング統計 ===");
+        TungSahurMod.LOGGER.info("登録済みエンティティレンダラー数: 2");
+        TungSahurMod.LOGGER.info("登録済みアイテムプロパティ数: 10+");
+        TungSahurMod.LOGGER.info("デバッグモード: {}", TungSahurMod.isDebugMode());
+        TungSahurMod.LOGGER.info("==================================");
     }
 }

@@ -1,272 +1,456 @@
+// TungSahurBatItem.java - 完全対応版
 package com.tungsahur.mod.items;
 
-import com.tungsahur.mod.client.renderer.BatItemRenderer;
+import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.entity.TungSahurEntity;
-import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResultHolder;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Rarity;
+import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
-import net.minecraftforge.client.extensions.common.IClientItemExtensions;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.function.Consumer;
+import java.util.List;
 
 public class TungSahurBatItem extends Item {
 
     public TungSahurBatItem(Properties properties) {
-        super(properties.rarity(Rarity.UNCOMMON));
+        super(properties);
     }
 
     @Override
-    public boolean hurtEnemy(ItemStack stack, LivingEntity target, LivingEntity attacker) {
-        if (target instanceof TungSahurEntity tungSahur) {
-            // Tung Sahurに対する特効ダメージ
-            target.hurt(attacker.damageSources().playerAttack((Player)attacker), 12.0F);
+    public void inventoryTick(ItemStack stack, Level level, net.minecraft.world.entity.Entity entity, int slotId, boolean isSelected) {
+        super.inventoryTick(stack, level, entity, slotId, isSelected);
 
-            // ノックバック効果
-            double knockbackStrength = 2.0D;
-            double dx = attacker.getX() - target.getX();
-            double dz = attacker.getZ() - target.getZ();
-            target.knockback(knockbackStrength, dx, dz);
+        if (!level.isClientSide && entity instanceof LivingEntity livingEntity) {
+            updateBatProperties(stack, level, livingEntity);
 
-            // 特効時の特殊パーティクル
-            if (attacker.level() instanceof ServerLevel serverLevel) {
-                spawnSpecialEffectParticles(serverLevel, target);
+            // エンティティバットの場合の特別処理
+            if (isEntityBat(stack) && livingEntity instanceof TungSahurEntity tungSahur) {
+                updateEntityBatTick(stack, level, tungSahur);
             }
+        }
+    }
 
-            // キル数カウント（血痕レベル用）
-            incrementKillCount(stack);
+    @Override
+    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand usedHand) {
+        ItemStack itemStack = player.getItemInHand(usedHand);
 
-            // 耐久度減少
-            stack.hurtAndBreak(1, attacker, (entity) -> {
-                entity.broadcastBreakEvent(entity.getUsedItemHand());
-            });
-
-            return true;
+        // エンティティバットは使用不可
+        if (isEntityBat(itemStack)) {
+            if (!level.isClientSide) {
+                player.sendSystemMessage(Component.literal("このバットは使用できません...").withStyle(ChatFormatting.DARK_RED));
+            }
+            return InteractionResultHolder.fail(itemStack);
         }
 
-        // 通常のエンティティへのダメージ
-        stack.hurtAndBreak(1, attacker, (entity) -> {
-            entity.broadcastBreakEvent(entity.getUsedItemHand());
-        });
+        // プレイヤーが使用する場合
+        if (!level.isClientSide) {
+            handlePlayerUse(level, player, itemStack);
+        }
+
+        return InteractionResultHolder.sidedSuccess(itemStack, level.isClientSide());
+    }
+
+    @Override
+    public UseAnim getUseAnimation(ItemStack stack) {
+        return UseAnim.BOW; // 弓のような使用アニメーション
+    }
+
+    @Override
+    public int getUseDuration(ItemStack stack) {
+        return 72000; // 長時間使用可能
+    }
+
+
+
+    @Override
+    public boolean hurtEnemy(ItemStack stack, LivingEntity target, LivingEntity attacker) {
+        if (isEntityBat(stack)) {
+            return false; // エンティティバットは攻撃に使用不可
+        }
+
+        if (attacker instanceof Player player) {
+            handlePlayerAttack(stack, target, player);
+        }
 
         return super.hurtEnemy(stack, target, attacker);
     }
 
     @Override
-    public UseAnim getUseAnimation(ItemStack stack) {
-        return UseAnim.BLOCK;
-    }
+    public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltipComponents, TooltipFlag isAdvanced) {
+        CompoundTag tag = stack.getTag();
 
-    @Override
-    public int getUseDuration(ItemStack stack) {
-        return 72000;
-    }
-
-    @Override
-    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        ItemStack itemstack = player.getItemInHand(hand);
-        player.startUsingItem(hand);
-        return InteractionResultHolder.consume(itemstack);
-    }
-
-    @Override
-    public void onUseTick(Level level, LivingEntity livingEntity, ItemStack stack, int remainingUseDuration) {
-        if (level.isClientSide && livingEntity instanceof Player player) {
-            // 使用中のクライアント側パーティクル
-            if (remainingUseDuration % 10 == 0) {
-                spawnUsageParticles(level, player);
-            }
-        } else if (!level.isClientSide && livingEntity instanceof Player player) {
-            // サーバー側での使用中効果
-            if (remainingUseDuration % 20 == 0) {
-                spawnServerUsageEffects((ServerLevel) level, player);
-            }
-        }
-    }
-
-    @Override
-    public float getDestroySpeed(ItemStack stack, net.minecraft.world.level.block.state.BlockState state) {
-        return 1.0F;
-    }
-
-    @Override
-    public boolean isValidRepairItem(ItemStack toRepair, ItemStack repair) {
-        return repair.is(net.minecraft.world.item.Items.OAK_PLANKS) ||
-                repair.is(net.minecraft.world.item.Items.STICK);
-    }
-
-    /**
-     * キル数をカウントする（血痕レベル計算用）
-     */
-    private void incrementKillCount(ItemStack stack) {
-        if (!stack.hasTag()) {
-            stack.getOrCreateTag();
-        }
-        int currentKills = stack.getTag().getInt("KillCount");
-        stack.getTag().putInt("KillCount", currentKills + 1);
-    }
-
-    /**
-     * Tung Sahur特効時の特殊パーティクル
-     */
-    private void spawnSpecialEffectParticles(ServerLevel level, LivingEntity target) {
-        // 特効ダメージ時の爆発的パーティクル
-        level.sendParticles(ParticleTypes.EXPLOSION,
-                target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ(),
-                5, 0.5, 0.5, 0.5, 0.0);
-
-        // 聖なる光のパーティクル
-        for (int i = 0; i < 15; i++) {
-            double angle = i * Math.PI / 7.5;
-            double radius = 2.0;
-            double x = target.getX() + Math.cos(angle) * radius;
-            double z = target.getZ() + Math.sin(angle) * radius;
-            double y = target.getY() + 1.0;
-
-            level.sendParticles(ParticleTypes.END_ROD,
-                    x, y, z, 1, 0.0, 0.3, 0.0, 0.0);
-        }
-
-        // 特効音
-        level.playSound(null, target.blockPosition(),
-                SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 1.0F, 1.5F);
-    }
-
-    /**
-     * 使用中のクライアント側パーティクル
-     */
-    private void spawnUsageParticles(Level level, Player player) {
-        // プレイヤー周りの威圧オーラ
-        for (int i = 0; i < 3; i++) {
-            double angle = i * Math.PI * 2.0 / 3.0 + level.getGameTime() * 0.1;
-            double radius = 1.5;
-            double x = player.getX() + Math.cos(angle) * radius;
-            double z = player.getZ() + Math.sin(angle) * radius;
-            double y = player.getY() + 1.0;
-
-            level.addParticle(ParticleTypes.SOUL_FIRE_FLAME,
-                    x, y, z, 0.0, 0.05, 0.0);
-        }
-
-        // バット周りのエネルギー
-        double batX = player.getX() + Math.sin(Math.toRadians(-player.getYRot())) * 0.8;
-        double batZ = player.getZ() + Math.cos(Math.toRadians(-player.getYRot())) * 0.8;
-        double batY = player.getY() + 1.2;
-
-        level.addParticle(ParticleTypes.ENCHANT,
-                batX, batY, batZ, 0.0, 0.0, 0.0);
-    }
-
-    /**
-     * 使用中のサーバー側効果
-     */
-    private void spawnServerUsageEffects(ServerLevel level, Player player) {
-        // 使用中の威圧効果
-        level.sendParticles(ParticleTypes.SOUL,
-                player.getX(), player.getY() + 1.0, player.getZ(),
-                5, 1.0, 0.5, 1.0, 0.02);
-
-        // 使用音
-        level.playSound(null, player.blockPosition(),
-                SoundEvents.SOUL_ESCAPE, SoundSource.PLAYERS, 0.3F, 1.5F);
-    }
-
-    /**
-     * クライアント側でのカスタムレンダラー登録
-     */
-    @Override
-    public void initializeClient(Consumer<IClientItemExtensions> consumer) {
-        consumer.accept(new IClientItemExtensions() {
-            @Override
-            public BlockEntityWithoutLevelRenderer getCustomRenderer() {
-                return new BatItemRenderer();
-            }
-        });
-    }
-    /**
-     * Tung Sahurが持っている時の特殊プロパティ処理
-     */
-    @Override
-    public void inventoryTick(ItemStack stack, Level level, Entity entity, int slotId, boolean isSelected) {
-        super.inventoryTick(stack, level, entity, slotId, isSelected);
-
-        // Tung Sahurが持っている時の特殊処理
-        if (entity instanceof TungSahurEntity tungSahur) {
-            updateTungSahurBatProperties(stack, tungSahur, level);
-        }
-    }
-
-    /**
-     * Tung Sahur用バットプロパティ更新
-     */
-    private void updateTungSahurBatProperties(ItemStack stack, TungSahurEntity tungSahur, Level level) {
-        if (!stack.hasTag()) {
-            stack.getOrCreateTag();
-        }
-
-        // 進化段階に応じた自動強化
-        int evolutionStage = tungSahur.getEvolutionStage();
-        stack.getTag().putInt("TungSahurStage", evolutionStage);
-
-        // 時間経過による自動キル数増加（恐怖演出）
-        if (level.getGameTime() % 1200 == 0) { // 1分ごと
-            int currentKills = stack.getTag().getInt("KillCount");
-            stack.getTag().putInt("KillCount", currentKills + 1);
-        }
-
-        // 特殊状態の設定
-        switch (evolutionStage) {
-            case 0 -> {
-                // 基本状態
-                stack.getTag().putBoolean("BasicTungSahur", true);
-            }
-            case 1 -> {
-                // 血染め状態
-                stack.getTag().putBoolean("Bloodstained", true);
-                stack.getTag().putInt("BloodLevel", 1);
-            }
-            case 2 -> {
-                // 呪い状態
-                stack.getTag().putBoolean("Cursed", true);
-                stack.getTag().putBoolean("DarkEnergy", true);
-                stack.getTag().putInt("BloodLevel", 3);
-                stack.getTag().putBoolean("SoulBound", true);
-            }
-        }
-
-        // Tung Sahurの近くにプレイヤーがいる時の反応
-        if (!level.isClientSide) {
-            Player nearestPlayer = level.getNearestPlayer(tungSahur, 16.0D);
-            if (nearestPlayer != null) {
-                stack.getTag().putBoolean("PlayerNearby", true);
-                stack.getTag().putLong("LastPlayerSeen", level.getGameTime());
-
-                // 恐怖レベル上昇
-                float distance = tungSahur.distanceTo(nearestPlayer);
-                int fearLevel = (int) Math.max(1, 5 - (distance / 3.0));
-                stack.getTag().putInt("FearLevel", fearLevel);
+        if (tag != null) {
+            // エンティティバットの場合
+            if (isEntityBat(stack)) {
+                addEntityBatTooltip(tooltipComponents, tag);
             } else {
-                stack.getTag().putBoolean("PlayerNearby", false);
+                // 通常バットの場合
+                addNormalBatTooltip(tooltipComponents, tag, level);
+            }
+
+            // デバッグ情報
+            if (TungSahurMod.isDebugMode() && isAdvanced.isAdvanced()) {
+                addDebugTooltip(tooltipComponents, tag);
+            }
+        } else {
+            tooltipComponents.add(Component.literal("不気味なバット...").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
+        }
+    }
+
+    @Override
+    public boolean isFoil(ItemStack stack) {
+        CompoundTag tag = stack.getTag();
+        if (tag != null) {
+            // エンチャント効果またはエンティティバット
+            return tag.getBoolean("Enchanted") || isEntityBat(stack) || tag.getInt("DayNumber") >= 2;
+        }
+        return super.isFoil(stack);
+    }
+
+    @Override
+    public boolean isEnchantable(ItemStack stack) {
+        return !isEntityBat(stack); // エンティティバットはエンチャント不可
+    }
+
+    @Override
+    public int getEnchantmentValue() {
+        return 1; // 低いエンチャント価値
+    }
+
+    // === 内部メソッド ===
+
+    /**
+     * バットプロパティの更新
+     */
+    private void updateBatProperties(ItemStack stack, Level level, LivingEntity holder) {
+        CompoundTag tag = stack.getOrCreateTag();
+
+        // 基本情報の更新
+        tag.putLong("LastUpdate", level.getGameTime());
+        tag.putString("HolderType", holder.getClass().getSimpleName());
+
+        // 持ち主に応じた特殊効果
+        if (holder instanceof Player player) {
+            updatePlayerBatProperties(tag, player, level);
+        } else if (holder instanceof TungSahurEntity tungSahur) {
+            updateTungSahurBatProperties(tag, tungSahur, level);
+        }
+
+        // 恐怖レベルの計算
+        calculateFearLevel(tag, level, holder);
+    }
+
+    /**
+     * エンティティバットの定期更新
+     */
+    private void updateEntityBatTick(ItemStack stack, Level level, TungSahurEntity tungSahur) {
+        CompoundTag tag = stack.getOrCreateTag();
+
+        // 日数の同期
+        int currentDay = tungSahur.getDayNumber();
+        if (tag.getInt("DayNumber") != currentDay) {
+            tag.putInt("DayNumber", currentDay);
+            updateEntityBatForDay(tag, currentDay);
+        }
+
+        // 戦闘状態の反映
+        updateCombatState(tag, tungSahur);
+
+        // 特殊状態の更新
+        updateSpecialStates(tag, tungSahur, level);
+    }
+
+    /**
+     * プレイヤー使用時の処理
+     */
+    private void handlePlayerUse(Level level, Player player, ItemStack stack) {
+        CompoundTag tag = stack.getOrCreateTag();
+
+        // 使用回数の記録
+        int useCount = tag.getInt("PlayerUseCount") + 1;
+        tag.putInt("PlayerUseCount", useCount);
+        tag.putLong("LastPlayerUse", level.getGameTime());
+
+
+
+        // パーティクル効果
+        if (level instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.SMOKE,
+                    player.getX(), player.getY() + 1.0, player.getZ(),
+                    5, 0.2, 0.2, 0.2, 0.02);
+        }
+
+        // 使用回数に応じた警告
+        if (useCount >= 5) {
+            player.sendSystemMessage(Component.literal("このバットから不吉な力を感じる...").withStyle(ChatFormatting.DARK_RED));
+        }
+    }
+
+    /**
+     * プレイヤー攻撃時の処理
+     */
+    private void handlePlayerAttack(ItemStack stack, LivingEntity target, Player attacker) {
+        CompoundTag tag = stack.getOrCreateTag();
+
+        // 攻撃回数の記録
+        int attackCount = tag.getInt("PlayerAttackCount") + 1;
+        tag.putInt("PlayerAttackCount", attackCount);
+
+        // ダメージ倍率の計算
+        float damageMultiplier = 1.0F + (attackCount * 0.1F);
+        tag.putFloat("DamageMultiplier", Math.min(damageMultiplier, 2.0F)); // 最大200%
+
+        // 血の記録
+        if (target.isDeadOrDying()) {
+            int killCount = tag.getInt("KillCount") + 1;
+            tag.putInt("KillCount", killCount);
+            tag.putBoolean("Bloodstained", true);
+
+            if (killCount >= 10) {
+                tag.putBoolean("Cursed", true);
+                attacker.sendSystemMessage(Component.literal("バットが呪われた...").withStyle(ChatFormatting.DARK_PURPLE));
             }
         }
     }
 
-// ClientSetup.java への追加アイテムプロパティ
+    /**
+     * プレイヤーバットプロパティの更新
+     */
+    private void updatePlayerBatProperties(CompoundTag tag, Player player, Level level) {
+        // プレイヤー情報
+        tag.putString("PlayerName", player.getName().getString());
+        tag.putBoolean("PlayerCreative", player.isCreative());
 
+        // 時間経過による変化
+        long gameTime = level.getGameTime();
+        long heldTime = gameTime - tag.getLong("FirstHeld");
+        if (!tag.contains("FirstHeld")) {
+            tag.putLong("FirstHeld", gameTime);
+        }
 
+        // 長時間保持による変化
+        if (heldTime > 24000) { // 1日以上
+            tag.putBoolean("PlayerOwned", true);
+            tag.putInt("OwnershipLevel", (int) (heldTime / 24000));
+        }
+    }
 
-// BatItemRenderer.java への Tung Sahur専用レンダリング追加
+    /**
+     * TungSahurバットプロパティの更新
+     */
+    private void updateTungSahurBatProperties(CompoundTag tag, TungSahurEntity tungSahur, Level level) {
+        // エンティティ情報
+        tag.putBoolean("EntityBat", true);
+        tag.putString("OwnerUUID", tungSahur.getUUID().toString());
+        tag.putFloat("OwnerScale", tungSahur.getScaleFactor());
 
+        // 戦闘経験
+        if (tungSahur.getLastHurtMob() != null) {
+            int combatExperience = tag.getInt("CombatExperience") + 1;
+            tag.putInt("CombatExperience", combatExperience);
+        }
+    }
 
+    /**
+     * 日数に応じたエンティティバット更新
+     */
+    private void updateEntityBatForDay(CompoundTag tag, int dayNumber) {
+        tag.putInt("DayNumber", dayNumber);
+
+        switch (dayNumber) {
+            case 1:
+                tag.putString("BatType", "Basic");
+                tag.putInt("BaseDamage", 6);
+                tag.putFloat("AttackSpeed", 1.0F);
+                break;
+
+            case 2:
+                tag.putString("BatType", "Enhanced");
+                tag.putInt("BaseDamage", 9);
+                tag.putFloat("AttackSpeed", 1.2F);
+                tag.putBoolean("Enchanted", true);
+                break;
+
+            case 3:
+                tag.putString("BatType", "Ultimate");
+                tag.putInt("BaseDamage", 12);
+                tag.putFloat("AttackSpeed", 1.5F);
+                tag.putBoolean("Enchanted", true);
+                tag.putBoolean("Legendary", true);
+                break;
+        }
+    }
+
+    /**
+     * 戦闘状態の更新
+     */
+    private void updateCombatState(CompoundTag tag, TungSahurEntity tungSahur) {
+        tag.putBoolean("InCombat", tungSahur.getTarget() != null);
+        tag.putBoolean("Attacking", tungSahur.isCurrentlyAttacking());
+        tag.putBoolean("Throwing", tungSahur.isCurrentlyThrowing());
+        tag.putBoolean("Jumping", tungSahur.isCurrentlyJumping());
+        tag.putBoolean("WallClimbing", tungSahur.isWallClimbing());
+        tag.putBoolean("BeingWatched", tungSahur.isBeingWatched());
+    }
+
+    /**
+     * 特殊状態の更新
+     */
+    private void updateSpecialStates(CompoundTag tag, TungSahurEntity tungSahur, Level level) {
+        // 周囲のプレイヤー検出
+        Player nearestPlayer = level.getNearestPlayer(tungSahur, 16.0D);
+        if (nearestPlayer != null) {
+            tag.putBoolean("PlayerNearby", true);
+            tag.putFloat("PlayerDistance", tungSahur.distanceTo(nearestPlayer));
+            tag.putLong("LastPlayerSeen", level.getGameTime());
+        } else {
+            tag.putBoolean("PlayerNearby", false);
+        }
+
+        // 環境による変化
+        if (level.isNight()) {
+            tag.putBoolean("NightTime", true);
+            tag.putInt("NightPower", tag.getInt("NightPower") + 1);
+        } else {
+            tag.putBoolean("NightTime", false);
+        }
+    }
+
+    /**
+     * 恐怖レベルの計算
+     */
+    private void calculateFearLevel(CompoundTag tag, Level level, LivingEntity holder) {
+        int fearLevel = 0;
+
+        // 基本恐怖レベル
+        if (isEntityBat(tag)) {
+            fearLevel += tag.getInt("DayNumber") * 2;
+        }
+
+        // 血による恐怖レベル
+        if (tag.getBoolean("Bloodstained")) {
+            fearLevel += tag.getInt("KillCount");
+        }
+
+        // 呪いによる恐怖レベル
+        if (tag.getBoolean("Cursed")) {
+            fearLevel += 5;
+        }
+
+        // 夜間ボーナス
+        if (level.isNight()) {
+            fearLevel += 2;
+        }
+
+        // プレイヤーが近くにいる場合
+        if (tag.getBoolean("PlayerNearby")) {
+            fearLevel += 3;
+        }
+
+        tag.putInt("FearLevel", Math.min(fearLevel, 20)); // 最大20
+    }
+
+    // === ツールチップメソッド ===
+
+    private void addEntityBatTooltip(List<Component> tooltip, CompoundTag tag) {
+        int dayNumber = tag.getInt("DayNumber");
+        String batType = tag.getString("BatType");
+
+        tooltip.add(Component.literal("§c§lTungSahurのバット").withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD));
+        tooltip.add(Component.literal("§7日数: §e" + dayNumber + "日目").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.literal("§7タイプ: §f" + batType).withStyle(ChatFormatting.GRAY));
+
+        if (tag.getBoolean("InCombat")) {
+            tooltip.add(Component.literal("§c§l⚔ 戦闘中").withStyle(ChatFormatting.RED));
+        }
+
+        if (tag.getBoolean("BeingWatched")) {
+            tooltip.add(Component.literal("§5§l👁 監視されている").withStyle(ChatFormatting.DARK_PURPLE));
+        }
+
+        tooltip.add(Component.literal("§8このアイテムは使用できません").withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC));
+    }
+
+    private void addNormalBatTooltip(List<Component> tooltip, CompoundTag tag, Level level) {
+        tooltip.add(Component.literal("§7不気味なバット").withStyle(ChatFormatting.GRAY));
+
+        int useCount = tag.getInt("PlayerUseCount");
+        if (useCount > 0) {
+            tooltip.add(Component.literal("§7使用回数: §e" + useCount).withStyle(ChatFormatting.GRAY));
+        }
+
+        if (tag.getBoolean("Bloodstained")) {
+            tooltip.add(Component.literal("§4§l血に染まっている").withStyle(ChatFormatting.DARK_RED));
+        }
+
+        if (tag.getBoolean("Cursed")) {
+            tooltip.add(Component.literal("§5§l呪われている").withStyle(ChatFormatting.DARK_PURPLE));
+        }
+
+        int fearLevel = tag.getInt("FearLevel");
+        if (fearLevel > 0) {
+            tooltip.add(Component.literal("§8恐怖度: " + "■".repeat(Math.min(fearLevel, 10))).withStyle(ChatFormatting.DARK_GRAY));
+        }
+    }
+
+    private void addDebugTooltip(List<Component> tooltip, CompoundTag tag) {
+        tooltip.add(Component.literal("§6§l=== DEBUG INFO ===").withStyle(ChatFormatting.GOLD));
+        tooltip.add(Component.literal("§7Entity Bat: §e" + tag.getBoolean("EntityBat")));
+        tooltip.add(Component.literal("§7Day Number: §e" + tag.getInt("DayNumber")));
+        tooltip.add(Component.literal("§7Fear Level: §e" + tag.getInt("FearLevel")));
+        tooltip.add(Component.literal("§7Last Update: §e" + tag.getLong("LastUpdate")));
+
+        if (tag.contains("OwnerUUID")) {
+            tooltip.add(Component.literal("§7Owner UUID: §e" + tag.getString("OwnerUUID")));
+        }
+    }
+
+    // === ユーティリティメソッド ===
+
+    /**
+     * エンティティバットかどうかの判定
+     */
+    public static boolean isEntityBat(ItemStack stack) {
+        CompoundTag tag = stack.getTag();
+        return tag != null && tag.getBoolean("EntityBat");
+    }
+
+    /**
+     * エンティティバットかどうかの判定
+     */
+    public static boolean isEntityBat(CompoundTag tag) {
+        return tag != null && tag.getBoolean("EntityBat");
+    }
+
+    /**
+     * 日数に応じたエンティティバットアイテムの作成
+     */
+    public static ItemStack createEntityBat(int dayNumber) {
+        ItemStack stack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        CompoundTag tag = stack.getOrCreateTag();
+
+        tag.putBoolean("EntityBat", true);
+        tag.putBoolean("Unbreakable", true);
+        tag.putInt("HideFlags", 63);
+        tag.putInt("DayNumber", dayNumber);
+
+        // 日数に応じた設定を適用
+        TungSahurBatItem item = (TungSahurBatItem) stack.getItem();
+        item.updateEntityBatForDay(tag, dayNumber);
+
+        return stack;
+    }
 }
