@@ -1,119 +1,105 @@
-// TungSahurRenderer.java - 完全修正版
+// TungSahurRenderer.java - スケール対応完全修正版
 package com.tungsahur.mod.client.renderer;
 
-import software.bernie.geckolib.renderer.GeoEntityRenderer;
-import software.bernie.geckolib.cache.object.BakedGeoModel;
-import software.bernie.geckolib.cache.object.GeoBone;
-
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.client.renderer.entity.EntityRendererProvider;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.item.ItemStack;
-
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.client.model.TungSahurModel;
 import com.tungsahur.mod.entity.TungSahurEntity;
-import com.tungsahur.mod.client.renderer.layers.SahurItemLayer;
 import com.tungsahur.mod.items.ModItems;
-import com.tungsahur.mod.TungSahurMod;
-
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.PoseStack;
-
-import javax.annotation.Nullable;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import software.bernie.geckolib.renderer.GeoEntityRenderer;
 
 public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
 
     public TungSahurRenderer(EntityRendererProvider.Context renderManager) {
         super(renderManager, new TungSahurModel());
-        this.shadowRadius = 0.8f;
-
-        // SahurItemLayerを追加してバットの表示を処理
-        this.addRenderLayer(new SahurItemLayer<>(this));
-
-        TungSahurMod.LOGGER.info("TungSahurRenderer初期化完了");
+        this.shadowRadius = 0.7F; // 基本影サイズ
     }
 
     @Override
-    public RenderType getRenderType(TungSahurEntity animatable, ResourceLocation texture,
-                                    @Nullable MultiBufferSource bufferSource, float partialTick) {
-        return RenderType.entityCutoutNoCull(texture);
-    }
+    public void render(TungSahurEntity entity, float entityYaw, float partialTick, PoseStack poseStack,
+                       MultiBufferSource bufferSource, int packedLight) {
 
-    @Override
-    public void preRender(PoseStack poseStack, TungSahurEntity entity, BakedGeoModel model,
-                          MultiBufferSource bufferSource, VertexConsumer buffer, boolean isReRender,
-                          float partialTick, int packedLight, int packedOverlay, float red,
-                          float green, float blue, float alpha) {
+        // レンダリング前の準備
+        ensureSingleBatIsEquipped(entity);
 
-        // バットが装備されているかチェックし、されていなければ強制的に装備
-        ensureBatIsEquipped(entity);
+        // 日数に応じたスケール適用
+        float scaleFactor = entity.getScaleFactor();
+        poseStack.pushPose();
+        poseStack.scale(scaleFactor, scaleFactor, scaleFactor);
 
-        // 進化段階に応じたスケール調整
-        float scale = entity.getScaleFactor();
-        poseStack.scale(scale, scale, scale);
+        // 影サイズもスケールに合わせて調整
+        this.shadowRadius = 0.7F * scaleFactor;
 
-        // 見られている時の震え効果
-        if (entity.isBeingWatched()) {
-            float shake = (float) Math.sin(entity.tickCount * 0.5F) * 0.01F;
-            poseStack.translate(shake, 0, shake);
+        // デバッグ情報をログに出力（100tick毎）
+        if (entity.tickCount % 100 == 0) {
+            TungSahurMod.LOGGER.debug("TungSahurレンダリング中: Stage={}, Scale={}, 影サイズ={}",
+                    entity.getEvolutionStage(), scaleFactor, this.shadowRadius);
         }
 
-        super.preRender(poseStack, entity, model, bufferSource, buffer, isReRender,
-                partialTick, packedLight, packedOverlay, red, green, blue, alpha);
+        // 親クラスのレンダリング実行
+        super.render(entity, entityYaw, partialTick, poseStack, bufferSource, packedLight);
+
+        poseStack.popPose();
     }
 
     /**
-     * バットが装備されているかを確認し、されていなければ強制的に装備
+     * バット1本のみ装備を保証する（2本持ち防止）
      */
-    private void ensureBatIsEquipped(TungSahurEntity entity) {
+    private void ensureSingleBatIsEquipped(TungSahurEntity entity) {
         ItemStack mainHand = entity.getMainHandItem();
+        ItemStack offHand = entity.getOffhandItem();
 
-        // バットが装備されていない、または正しいバットでない場合
+        // メインハンドにバットがない場合、進化段階に応じたバットを装備
         if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
-            ItemStack batStack = createBatForEntity(entity);
-            entity.setItemSlot(EquipmentSlot.MAINHAND, batStack);
+            ItemStack evolutionBat = createEvolutionBat(entity.getEvolutionStage());
+            entity.setItemInHand(InteractionHand.MAIN_HAND, evolutionBat);
+        }
 
-            TungSahurMod.LOGGER.debug("TungSahurにバットを強制装備しました");
+        // オフハンドは常に空にする（バット2本持ち防止）
+        if (!offHand.isEmpty()) {
+            entity.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
         }
     }
 
     /**
-     * エンティティに応じたバットアイテムを作成
+     * 進化段階に応じたバットアイテムを作成
      */
-    private ItemStack createBatForEntity(TungSahurEntity entity) {
+    private ItemStack createEvolutionBat(int evolutionStage) {
         ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        CompoundTag tag = batStack.getOrCreateTag();
 
-        // 進化段階に応じてバットを強化
-        if (!batStack.hasTag()) {
-            batStack.getOrCreateTag();
-        }
-
-        int evolutionStage = entity.getEvolutionStage();
-        batStack.getTag().putInt("TungSahurStage", evolutionStage);
-        batStack.getTag().putBoolean("TungSahurOwned", true);
-        batStack.getTag().putBoolean("ForceDisplay", true);
-        batStack.getTag().putBoolean("AlwaysVisible", true);
-        batStack.getTag().putBoolean("ForceRender", true);
+        // 基本タグ設定
+        tag.putInt("EvolutionStage", evolutionStage);
+        tag.putBoolean("EntityBat", true);
+        tag.putString("CustomModelData", "tung_sahur_bat_stage" + evolutionStage);
 
         // 進化段階に応じた強化
         switch (evolutionStage) {
-            case 1:
-                batStack.getTag().putInt("Damage", 15);
-                batStack.getTag().putString("BatType", "Enhanced");
-                batStack.getTag().putInt("BloodLevel", 1);
-                break;
-            case 2:
-                batStack.getTag().putInt("Damage", 25);
-                batStack.getTag().putString("BatType", "Legendary");
-                batStack.getTag().putBoolean("Cursed", true);
-                batStack.getTag().putInt("BloodLevel", 3);
-                break;
-            default:
-                batStack.getTag().putInt("Damage", 8);
-                batStack.getTag().putString("BatType", "Normal");
-                break;
+            case 0 -> { // 1日目
+                tag.putInt("Damage", 8);
+                tag.putString("BatType", "Basic");
+                tag.putInt("CustomModelData", 100);
+            }
+            case 1 -> { // 2日目
+                tag.putInt("Damage", 15);
+                tag.putString("BatType", "Enhanced");
+                tag.putInt("BloodLevel", 1);
+                tag.putInt("CustomModelData", 101);
+            }
+            case 2 -> { // 3日目以降
+                tag.putInt("Damage", 25);
+                tag.putString("BatType", "Legendary");
+                tag.putBoolean("Cursed", true);
+                tag.putInt("BloodLevel", 3);
+                tag.putInt("Enchantment", 1);
+                tag.putInt("CustomModelData", 102);
+            }
         }
 
         return batStack;
@@ -121,35 +107,21 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
 
     @Override
     protected float getDeathMaxRotation(TungSahurEntity entityLivingBaseIn) {
-        return 0.0F;
+        return 0.0F; // 死亡時の回転を無効
     }
 
     /**
      * 死亡時にもバットを表示し続ける
      */
     @Override
-    public void render(TungSahurEntity entity, float entityYaw, float partialTick, PoseStack poseStack,
-                       MultiBufferSource bufferSource, int packedLight) {
-
-        // レンダリング前にバットの装備を確認
-        ensureBatIsEquipped(entity);
-
-        // デバッグ情報をログに出力
-        if (entity.tickCount % 100 == 0) {
-            TungSahurMod.LOGGER.debug("TungSahurレンダリング中: Stage={}, Scale={}",
-                    entity.getEvolutionStage(), entity.getScaleFactor());
-        }
-
-        super.render(entity, entityYaw, partialTick, poseStack, bufferSource, packedLight);
-    }
-
-    @Override
     public ResourceLocation getTextureLocation(TungSahurEntity entity) {
-        // デバッグ用：テクスチャパスをログに出力
+        // デバッグ用：テクスチャパスをログに出力（初回のみ）
         ResourceLocation texture = super.getTextureLocation(entity);
         if (entity.tickCount == 1) {
-            TungSahurMod.LOGGER.info("使用中のテクスチャ: {}", texture);
+            TungSahurMod.LOGGER.info("使用中のテクスチャ: {} (Stage: {})", texture, entity.getEvolutionStage());
         }
         return texture;
     }
+
+
 }

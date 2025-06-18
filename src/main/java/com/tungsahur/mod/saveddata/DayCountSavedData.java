@@ -1,3 +1,4 @@
+// DayCountSavedData.java - 改良版（コマンド対応）
 package com.tungsahur.mod.saveddata;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -8,9 +9,10 @@ import net.minecraft.world.level.saveddata.SavedData;
 public class DayCountSavedData extends SavedData {
     private static final String DATA_NAME = TungSahurMod.MODID + "_day_count";
 
-    private int dayCount = 0;
+    private int dayCount = 0; // 0=1日目, 1=2日目, 2=3日目
     private long lastDayTime = -1;
     private boolean isActive = false;
+    private boolean gameStarted = false;
 
     public DayCountSavedData() {
         super();
@@ -29,6 +31,7 @@ public class DayCountSavedData extends SavedData {
         data.dayCount = tag.getInt("dayCount");
         data.lastDayTime = tag.getLong("lastDayTime");
         data.isActive = tag.getBoolean("isActive");
+        data.gameStarted = tag.getBoolean("gameStarted");
         return data;
     }
 
@@ -37,6 +40,7 @@ public class DayCountSavedData extends SavedData {
         tag.putInt("dayCount", dayCount);
         tag.putLong("lastDayTime", lastDayTime);
         tag.putBoolean("isActive", isActive);
+        tag.putBoolean("gameStarted", gameStarted);
         return tag;
     }
 
@@ -58,55 +62,94 @@ public class DayCountSavedData extends SavedData {
             setDirty();
 
             // 日数変更の通知
-            level.getServer().getPlayerList().getPlayers().forEach(player -> {
-                player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                        "§c§l[Tung Sahur] §r§c" + (dayCount + 1) + "日目の夜が始まった..."
-                ));
-            });
+            String dayMessage = switch (dayCount) {
+                case 0 -> "§c§l[Tung Sahur] §r§c1日目の夜が始まった...";
+                case 1 -> "§c§l[Tung Sahur] §r§62日目の夜が始まった... 彼らが強くなっている...";
+                case 2 -> "§4§l[Tung Sahur] §r§43日目の夜が始まった... 最終形態が解禁された...";
+                default -> "§c§l[Tung Sahur] §r§c夜が始まった...";
+            };
+
+            level.getServer().getPlayerList().broadcastSystemMessage(
+                    net.minecraft.network.chat.Component.literal(dayMessage), false);
         }
     }
 
+    // ゲッター
     public int getDayCount() {
         return dayCount;
-    }
-
-    public void setDayCount(int dayCount) {
-        this.dayCount = Math.max(0, Math.min(dayCount, 2));
-        setDirty();
-    }
-
-    public void resetDayCount() {
-        this.dayCount = 0;
-        this.lastDayTime = -1;
-        setDirty();
     }
 
     public boolean isActive() {
         return isActive;
     }
 
-    public void setActive(boolean active) {
-        this.isActive = active;
-        if (active && lastDayTime == -1) {
-            // 初回起動時は現在の日を基準にする
-            lastDayTime = 0;
-        }
-        setDirty();
+    public boolean hasGameStarted() {
+        return gameStarted;
     }
 
     public String getDayStatus() {
-        if (!isActive) {
-            return "§7非アクティブ";
-        }
-
-        String[] dayNames = {"§a1日目", "§e2日目", "§c3日目"};
-        if (dayCount < dayNames.length) {
-            return dayNames[dayCount];
-        }
-        return "§4終了";
+        return switch (dayCount) {
+            case 0 -> "§e1日目";
+            case 1 -> "§62日目";
+            case 2 -> "§c3日目";
+            default -> "§7不明";
+        };
     }
 
-    public boolean isGameOver() {
-        return dayCount >= 2 && isActive;
+    // コマンド用セッター
+    public void setDayCount(int count) {
+        this.dayCount = Math.max(0, Math.min(2, count));
+        setDirty();
+
+        TungSahurMod.LOGGER.info("Day count manually set to: {} (Display: {})",
+                this.dayCount, this.dayCount + 1);
+    }
+
+    public void start() {
+        this.isActive = true;
+        this.gameStarted = true;
+        this.dayCount = 0; // 1日目から開始
+        this.lastDayTime = -1;
+        setDirty();
+
+        TungSahurMod.LOGGER.info("Tung Sahur game started");
+    }
+
+    public void stop() {
+        this.isActive = false;
+        setDirty();
+
+        TungSahurMod.LOGGER.info("Tung Sahur game stopped");
+    }
+
+    public void reset() {
+        this.dayCount = 0;
+        this.lastDayTime = -1;
+        this.isActive = false;
+        this.gameStarted = false;
+        setDirty();
+
+        TungSahurMod.LOGGER.info("Tung Sahur game reset");
+    }
+
+    /**
+     * ゲームが開始されているかをチェック
+     * summon時の判定に使用
+     */
+    public boolean isGameActive() {
+        return isActive && gameStarted;
+    }
+
+    /**
+     * 現在のステージを取得（エンティティ用）
+     */
+    public int getCurrentStage() {
+        if (dayCount >= 2) {
+            return 2; // 3日目以降：最終形態
+        } else if (dayCount >= 1) {
+            return 1; // 2日目：強化形態
+        } else {
+            return 0; // 1日目：基本形態
+        }
     }
 }
