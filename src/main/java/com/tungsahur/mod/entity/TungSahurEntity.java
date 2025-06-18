@@ -1,4 +1,4 @@
-// TungSahurEntity.java - 完全改修版（アニメーション対応・新攻撃システム）
+// TungSahurEntity.java - 完全版（全メソッド実装）
 package com.tungsahur.mod.entity;
 
 import com.tungsahur.mod.entity.goals.*;
@@ -55,45 +55,44 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private static final EntityDataAccessor<Boolean> IS_BEING_WATCHED = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> IS_CLIMBING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
 
-    // アニメーション定義
-    protected static final RawAnimation IDLE1_ANIM = RawAnimation.begin().thenLoop("idle");
-    protected static final RawAnimation IDLE2_ANIM = RawAnimation.begin().thenLoop("idle2");
-    protected static final RawAnimation IDLE3_ANIM = RawAnimation.begin().thenLoop("idle3");
-    protected static final RawAnimation WALK_ANIM = RawAnimation.begin().thenLoop("walk");
-    protected static final RawAnimation SPRINT_ANIM = RawAnimation.begin().thenLoop("sprint");
-    protected static final RawAnimation PUNCH_RIGHT_ANIM = RawAnimation.begin().thenPlay("punch_right");
-    protected static final RawAnimation BAT_SWING_ANIM = RawAnimation.begin().thenPlay("bat_swing");
-    protected static final RawAnimation BAT_THROW_ANIM = RawAnimation.begin().thenPlay("bat_throw");
-    protected static final RawAnimation JUMPING_ANIM = RawAnimation.begin().thenPlay("jumping");
-    protected static final RawAnimation CLIMBING_ANIM = RawAnimation.begin().thenLoop("climbing"); // 壁登りアニメーション
-    protected static final RawAnimation DEATH_ANIM = RawAnimation.begin().thenPlay("death");
+    // アニメーション定数
+    private static final RawAnimation DEATH_ANIM = RawAnimation.begin().then("death", Animation.LoopType.PLAY_ONCE);
 
+    private static final RawAnimation IDLE_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
+    private static final RawAnimation WALKING_ANIM = RawAnimation.begin().then("walk", Animation.LoopType.LOOP);
+    private static final RawAnimation RUNNING_ANIM = RawAnimation.begin().then("sprint", Animation.LoopType.LOOP);
+    private static final RawAnimation CLIMBING_ANIM = RawAnimation.begin().then("climbing", Animation.LoopType.LOOP);
+    private static final RawAnimation PUNCH_ANIM = RawAnimation.begin().then("punch_right", Animation.LoopType.PLAY_ONCE);
+    private static final RawAnimation BAT_SWING_ANIM = RawAnimation.begin().then("bat_swing", Animation.LoopType.PLAY_ONCE);
+    private static final RawAnimation BAT_THROW_ANIM = RawAnimation.begin().then("bat_throw", Animation.LoopType.PLAY_ONCE);
+    private static final RawAnimation JUMPING_ANIM = RawAnimation.begin().then("jumping", Animation.LoopType.PLAY_ONCE);
+    private static final RawAnimation IDLE1_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
+    private static final RawAnimation IDLE2_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
+    private static final RawAnimation IDLE3_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
     private final AnimatableInstanceCache geoCache = GeckoLibUtil.createInstanceCache(this);
 
-    // 攻撃タイマー
+    // 状態管理
     private int attackCooldown = 0;
     private int throwCooldown = 0;
     private int jumpCooldown = 0;
-
-    // アニメーション状態
-    private int animationTimer = 0;
     private boolean isCurrentlyAttacking = false;
     private boolean isCurrentlyThrowing = false;
     private boolean isCurrentlyJumping = false;
-
-    // バット装備管理
-    private int batCheckTimer = 0;
+    private int animationTimer = 0;
     private boolean forceEquipBat = false;
+    private int batCheckTimer = 0;
 
     public TungSahurEntity(EntityType<? extends Monster> entityType, Level level) {
         super(entityType, level);
         this.noCulling = true;
+        this.xpReward = 15;
     }
 
     @Override
     protected void defineSynchedData() {
         super.defineSynchedData();
-        this.entityData.define(EVOLUTION_STAGE, 0);
+        // Stage1でスポーンするようにデフォルト値を設定
+        this.entityData.define(EVOLUTION_STAGE, 1);
         this.entityData.define(SCALE_FACTOR, 1.0F);
         this.entityData.define(IS_SPRINTING, false);
         this.entityData.define(IS_ATTACKING, false);
@@ -105,16 +104,16 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     @Override
     protected void registerGoals() {
-        // 移動・基本行動ゴール
-        this.goalSelector.addGoal(1, new FloatGoal(this));
-        this.goalSelector.addGoal(2, new TungSahurMeleeAttackGoal(this, 1.2D, false));
-        this.goalSelector.addGoal(3, new TungSahurThrowGoal(this));
-        this.goalSelector.addGoal(4, new TungSahurJumpAttackGoal(this));
-        this.goalSelector.addGoal(5, new TungSahurClimbGoal(this)); // 壁登りゴール追加
-        this.goalSelector.addGoal(6, new TungSahurSmartMoveToTargetGoal(this, 1.0D));
-        this.goalSelector.addGoal(7, new RandomStrollGoal(this, 0.8D));
-        this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(9, new RandomLookAroundGoal(this));
+        // 移動・基本行動ゴール（優先度調整）
+        this.goalSelector.addGoal(0, new FloatGoal(this));
+        this.goalSelector.addGoal(1, new TungSahurMeleeAttackGoal(this, 1.2D, false));
+        this.goalSelector.addGoal(2, new TungSahurThrowGoal(this));
+        this.goalSelector.addGoal(3, new TungSahurJumpAttackGoal(this));
+        this.goalSelector.addGoal(4, new TungSahurClimbGoal(this));
+        this.goalSelector.addGoal(5, new TungSahurSmartMoveToTargetGoal(this, 1.0D));
+        this.goalSelector.addGoal(6, new ImprovedRandomStrollGoal(this, 0.8D));
+        this.goalSelector.addGoal(7, new LookAtPlayerGoal(this, Player.class, 12.0F));
+        this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
         // ターゲット選択ゴール
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
@@ -124,7 +123,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     public static AttributeSupplier.Builder createAttributes() {
         return Monster.createMonsterAttributes()
                 .add(Attributes.MAX_HEALTH, 50.0D)
-                .add(Attributes.MOVEMENT_SPEED, 0.25D)
+                .add(Attributes.MOVEMENT_SPEED, 0.28D)
                 .add(Attributes.ATTACK_DAMAGE, 8.0D)
                 .add(Attributes.FOLLOW_RANGE, 32.0D)
                 .add(Attributes.ARMOR, 2.0D)
@@ -137,41 +136,69 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
         if (!this.level().isClientSide) {
             updateEvolutionStage();
-            updateBatEquipment();
+            updateCooldowns();
+            updateWatchedStatus();
             updateAnimationTimers();
-            updatePlayerWatchStatus(); // プレイヤー視線チェック
-            updateMovementSpeed(); // 速度更新（視線状態を考慮）
+            ensureBatEquipped();
+            handleAutoJump();
         }
     }
 
-    private void updatePlayerWatchStatus() {
-        Player nearestPlayer = this.level().getNearestPlayer(this, 32.0D);
-        boolean isWatched = false;
+    @Override
+    public SpawnGroupData finalizeSpawn(ServerLevelAccessor level, DifficultyInstance difficulty,
+                                        MobSpawnType reason, @Nullable SpawnGroupData spawnData,
+                                        @Nullable CompoundTag dataTag) {
+        SpawnGroupData result = super.finalizeSpawn(level, difficulty, reason, spawnData, dataTag);
 
-        if (nearestPlayer != null) {
-            isWatched = isPlayerLookingAt(nearestPlayer);
+        // スポーン時に必ずstage1に設定
+        this.setEvolutionStage(1);
+        this.setScaleFactor(1.0F);
+
+        // 初期装備としてバットを装備
+        ItemStack bat = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        if (!bat.hasTag()) {
+            bat.getOrCreateTag();
         }
+        bat.getTag().putBoolean("TungSahurOwned", true);
+        bat.getTag().putInt("TungSahurStage", 1);
+        this.setItemSlot(EquipmentSlot.MAINHAND, bat);
 
-        // 視線状態をデータに保存
-        this.entityData.set(IS_BEING_WATCHED, isWatched);
+        return result;
+    }
 
-        // 視線状態の変化に応じた効果
-        if (isWatched && nearestPlayer != null) {
-            // 見られている時の効果
-            double distance = this.distanceTo(nearestPlayer);
+    private void handleAutoJump() {
+        if (!this.onGround() || this.getTarget() == null) return;
 
-            // 近すぎる場合は少し後退する行動
-            if (distance < 3.0D && this.getRandom().nextFloat() < 0.1F) {
-                Vec3 awayDirection = this.position().subtract(nearestPlayer.position()).normalize();
-                Vec3 retreatPos = this.position().add(awayDirection.scale(1.5D));
-                this.getNavigation().moveTo(retreatPos.x, retreatPos.y, retreatPos.z, 0.3D);
+        if (this.horizontalCollision && this.getDeltaMovement().horizontalDistanceSqr() > 0.01D) {
+            Vec3 lookDirection = this.getLookAngle();
+            BlockPos frontPos = this.blockPosition().offset((int)lookDirection.x, 0, (int)lookDirection.z);
+            BlockPos aboveFrontPos = frontPos.above();
+
+            if (!this.level().getBlockState(frontPos).isAir() &&
+                    this.level().getBlockState(aboveFrontPos).isAir() &&
+                    this.level().getBlockState(aboveFrontPos.above()).isAir()) {
+
+                this.setDeltaMovement(this.getDeltaMovement().add(0, 0.42D, 0));
+                this.hasImpulse = true;
             }
+        }
+    }
 
-            // 見られている時のパーティクル効果（控えめに）
-            if (this.level() instanceof ServerLevel serverLevel && this.tickCount % 40 == 0) {
-                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                        this.getX(), this.getY() + this.getBbHeight() * 0.8, this.getZ(),
-                        1, 0.1, 0.1, 0.1, 0.01);
+    private void ensureBatEquipped() {
+        batCheckTimer++;
+        if (batCheckTimer % 20 == 0 || forceEquipBat) { // 1秒ごとにチェック
+            ItemStack mainHand = this.getMainHandItem();
+            if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get()) || forceEquipBat) {
+                ItemStack bat = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+
+                if (!bat.hasTag()) {
+                    bat.getOrCreateTag();
+                }
+                bat.getTag().putBoolean("TungSahurOwned", true);
+                bat.getTag().putInt("TungSahurStage", this.getEvolutionStage());
+
+                this.setItemSlot(EquipmentSlot.MAINHAND, bat);
+                forceEquipBat = false;
             }
         }
     }
@@ -179,132 +206,97 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private void updateEvolutionStage() {
         if (this.level() instanceof ServerLevel serverLevel) {
             DayCountSavedData dayData = DayCountSavedData.get(serverLevel);
-            int currentDay = dayData.getDayCount();
-            int newStage = Math.min(currentDay, 2); // 0, 1, 2 (1日目、2日目、3日目)
+            int dayCount = dayData.getDayCount();
 
-            if (newStage != getEvolutionStage()) {
-                setEvolutionStage(newStage);
-                evolveToStage(newStage);
+            int targetStage;
+            if (dayCount >= 3) {
+                targetStage = 2;
+            } else if (dayCount >= 2) {
+                targetStage = 1;
+            } else {
+                targetStage = 1; // 最小値を1に設定
+            }
+
+            if (targetStage != this.getEvolutionStage()) {
+                this.setEvolutionStage(targetStage);
+                updateStageBasedAttributes();
             }
         }
     }
 
-    private void updateBatEquipment() {
-        batCheckTimer++;
-        if (batCheckTimer >= 20 || forceEquipBat) {
-            ItemStack mainHand = this.getMainHandItem();
+    private void updateStageBasedAttributes() {
+        int stage = this.getEvolutionStage();
 
-            if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
-                ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
-                CompoundTag tag = new CompoundTag();
-                tag.putInt("TungSahurStage", getEvolutionStage());
-                batStack.setTag(tag);
-
-                this.setItemSlot(EquipmentSlot.MAINHAND, batStack);
-                forceEquipBat = false;
+        switch (stage) {
+            case 1 -> {
+                this.setScaleFactor(1.0F);
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(50.0D);
+                this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(0.28D);
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(8.0D);
             }
-            batCheckTimer = 0;
+            case 2 -> {
+                this.setScaleFactor(1.15F);
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(75.0D);
+                this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(0.32D);
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(12.0D);
+            }
+            default -> {
+                this.setScaleFactor(1.0F);
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(50.0D);
+                this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(0.28D);
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(8.0D);
+            }
         }
+
+        this.setHealth(this.getMaxHealth());
+    }
+
+    private void updateCooldowns() {
+        if (attackCooldown > 0) attackCooldown--;
+        if (throwCooldown > 0) throwCooldown--;
+        if (jumpCooldown > 0) jumpCooldown--;
     }
 
     private void updateAnimationTimers() {
         if (animationTimer > 0) {
             animationTimer--;
             if (animationTimer <= 0) {
-                // アニメーション終了時の処理
-                setAttacking(false);
-                setThrowing(false);
-                setJumping(false);
                 isCurrentlyAttacking = false;
                 isCurrentlyThrowing = false;
                 isCurrentlyJumping = false;
+                setAttacking(false);
+                setThrowing(false);
+                setJumping(false);
+            }
+        }
+    }
+
+    private void updateWatchedStatus() {
+        boolean wasWatched = this.isBeingWatched();
+        boolean isWatched = false;
+
+        for (Player player : this.level().getEntitiesOfClass(Player.class, this.getBoundingBox().inflate(16.0D))) {
+            if (player.hasLineOfSight(this)) {
+                Vec3 lookVec = player.getLookAngle().normalize();
+                Vec3 directionToThis = this.position().subtract(player.position()).normalize();
+                double dotProduct = lookVec.dot(directionToThis);
+
+                if (dotProduct > 0.5D) {
+                    isWatched = true;
+                    break;
+                }
             }
         }
 
-        // クールダウン更新
-        if (attackCooldown > 0) attackCooldown--;
-        if (throwCooldown > 0) throwCooldown--;
-        if (jumpCooldown > 0) jumpCooldown--;
-    }
+        this.setBeingWatched(isWatched);
 
-    private void updateMovementSpeed() {
-        LivingEntity target = this.getTarget();
-        double baseSpeed = 0.25D;
-        double multiplier = 1.0D;
-        boolean shouldSprint = false;
-
-        // プレイヤーの視線による速度変化（最優先）
-        Player nearestPlayer = this.level().getNearestPlayer(this, 32.0D);
-        if (nearestPlayer != null && isPlayerLookingAt(nearestPlayer)) {
-            double distance = this.distanceTo(nearestPlayer);
-
-            // 視線を受けている間は距離に応じて大幅減速
-            if (distance <= 20.0D) {
-                // 距離が近いほど遅くなる（0.02～0.15の範囲）
-                double distanceRatio = Math.max(0.1D, distance / 20.0D);
-                multiplier = 0.02D + (distanceRatio * 0.13D);
-                shouldSprint = false;
-
-                // 非常に近い場合はほぼ静止
-                if (distance <= 5.0D) {
-                    multiplier = 0.01D + (distance / 5.0D) * 0.04D; // 0.01～0.05
-                }
-            }
-        } else {
-            // 視線から外れた場合は通常速度またはそれ以上
-            if (target != null) {
-                double distance = this.distanceTo(target);
-
-                // 視線から外れた時は素早く移動
-                if (distance > 8.0D || (getEvolutionStage() >= 1 && distance > 4.0D)) {
-                    shouldSprint = true;
-                    multiplier = 1.8D + (getEvolutionStage() * 0.3D); // 通常より速い
-                } else {
-                    multiplier = 1.2D + (getEvolutionStage() * 0.2D);
-                }
-            } else {
-                // ターゲットがない場合
-                multiplier = 1.0D;
-            }
+        if (isWatched && !wasWatched) {
+            this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(
+                    this.getAttribute(Attributes.MOVEMENT_SPEED).getBaseValue() * 0.3D
+            );
+        } else if (!isWatched && wasWatched) {
+            updateStageBasedAttributes();
         }
-
-        setSprinting(shouldSprint);
-        this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(baseSpeed * multiplier);
-    }
-
-    private boolean isPlayerLookingAt(Player player) {
-        Vec3 playerEyes = player.getEyePosition();
-        Vec3 lookDirection = player.getViewVector(1.0F);
-        Vec3 targetPos = this.position().add(0, this.getBbHeight() / 2, 0);
-        Vec3 toTarget = targetPos.subtract(playerEyes);
-
-        double distance = toTarget.length();
-        if (distance > 32.0D) return false;
-
-        // 視線の角度計算（30度の範囲）
-        double dot = lookDirection.normalize().dot(toTarget.normalize());
-        double angle = Math.acos(Math.max(-1.0, Math.min(1.0, dot)));
-
-        // 視線が合っているかつ障害物がない
-        return angle < Math.toRadians(30) && this.hasLineOfSight(player);
-    }
-
-    private void evolveToStage(int stage) {
-        float newScale = 1.0F + (stage * 0.3F);
-        setScaleFactor(newScale);
-
-        this.level().playSound(null, this.blockPosition(), SoundEvents.ANVIL_LAND,
-                SoundSource.HOSTILE, 1.0F, 0.5F + stage * 0.2F);
-
-        // ステータス調整
-        double healthMultiplier = 1.0D + (stage * 0.4D);
-        double damageMultiplier = 1.0D + (stage * 0.5D); // 3日目は大幅威力アップ
-
-        this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(50.0D * healthMultiplier);
-        this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(8.0D * damageMultiplier);
-        this.setHealth(this.getMaxHealth());
-
-        forceEquipBat = true;
     }
 
     // 攻撃メソッド
@@ -312,7 +304,9 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         if (attackCooldown <= 0) {
             float damage = (float) this.getAttributeValue(Attributes.ATTACK_DAMAGE);
 
-            // 3日目は近接攻撃威力大幅アップ
+            if (getEvolutionStage() >= 1) {
+                damage *= 1.5F;
+            }
             if (getEvolutionStage() >= 2) {
                 damage *= 1.8F;
             }
@@ -321,21 +315,19 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
             if (hasWeapon) {
                 setAttacking(true);
-                animationTimer = 25; // bat_swing アニメーション時間
+                animationTimer = 25;
                 playBatSwingAnimation();
             } else {
                 setAttacking(true);
-                animationTimer = 20; // punch_right アニメーション時間
+                animationTimer = 20;
                 playPunchAnimation();
             }
 
             isCurrentlyAttacking = true;
             attackCooldown = 40 - (getEvolutionStage() * 5);
 
-            // ダメージ適用
             target.hurt(this.damageSources().mobAttack(this), damage);
 
-            // バット効果適用
             if (hasWeapon) {
                 applyBatEffects(target);
             }
@@ -345,7 +337,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     public void performThrowAttack(LivingEntity target) {
         if (throwCooldown <= 0 && getEvolutionStage() >= 1) {
             setThrowing(true);
-            animationTimer = 30; // bat_throw アニメーション時間
+            animationTimer = 30;
             isCurrentlyThrowing = true;
             playThrowAnimation();
 
@@ -361,18 +353,17 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             this.level().addFreshEntity(projectile);
 
             throwCooldown = 100 - (getEvolutionStage() * 10);
-            forceEquipBat = true; // 新しいバットを装備
+            forceEquipBat = true;
         }
     }
 
     public void performJumpAttack(LivingEntity target) {
         if (jumpCooldown <= 0 && getEvolutionStage() >= 1 && this.onGround()) {
             setJumping(true);
-            animationTimer = 35; // jumping アニメーション時間
+            animationTimer = 35;
             isCurrentlyJumping = true;
             playJumpAnimation();
 
-            // ジャンプ動作
             Vec3 direction = target.position().subtract(this.position()).normalize();
             double jumpForce = 0.8D + (getEvolutionStage() * 0.2D);
 
@@ -388,12 +379,10 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     private void applyBatEffects(LivingEntity target) {
         if (this.level() instanceof ServerLevel serverLevel) {
-            // パーティクル効果
             serverLevel.sendParticles(ParticleTypes.CRIT,
                     target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ(),
                     8, 0.2, 0.2, 0.2, 0.1);
 
-            // 進化段階に応じたデバフ効果
             switch (getEvolutionStage()) {
                 case 1:
                     target.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 80, 0));
@@ -409,154 +398,73 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     // アニメーション再生メソッド
     private void playPunchAnimation() {
-        // punch_right アニメーション再生の準備
+        // GeckoLibアニメーション制御で処理
     }
 
     private void playBatSwingAnimation() {
-        // bat_swing アニメーション再生の準備
+        // GeckoLibアニメーション制御で処理
     }
 
     private void playThrowAnimation() {
-        // bat_throw アニメーション再生の準備
+        // GeckoLibアニメーション制御で処理
     }
 
     private void playJumpAnimation() {
-        // jumping アニメーション再生の準備
+        // GeckoLibアニメーション制御で処理
     }
 
-    // GeckoLib アニメーション制御
+    // 壁登り機能
     @Override
-    public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
-        controllers.add(new AnimationController<>(this, "movement", 5, this::movementAnimController));
-        controllers.add(new AnimationController<>(this, "action", 0, this::actionAnimController));
+    protected void jumpFromGround() {
+        super.jumpFromGround();
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.CLOUD,
+                    this.getX(), this.getY(), this.getZ(),
+                    5, 0.3, 0.1, 0.3, 0.1);
+        }
     }
 
-    private PlayState movementAnimController(AnimationState<TungSahurEntity> state) {
-        // アクション中は移動アニメーションを停止
-        if (isCurrentlyAttacking || isCurrentlyThrowing || isCurrentlyJumping) {
-            return PlayState.STOP;
-        }
+    @Override
+    public boolean onClimbable() {
+        return this.isClimbing() || super.onClimbable();
+    }
 
-        // 壁登り中のアニメーション
-        if (isClimbing()) {
-            return state.setAndContinue(CLIMBING_ANIM);
-        }
+    public boolean canClimbWalls() {
+        return this.getEvolutionStage() >= 1;
+    }
 
-        if (state.isMoving()) {
-            if (isSprinting()) {
-                return state.setAndContinue(SPRINT_ANIM);
+    @Override
+    public void aiStep() {
+        super.aiStep();
+
+        if (this.horizontalCollision && this.getTarget() != null) {
+            double heightDiff = this.getTarget().getY() - this.getY();
+            if (heightDiff > 1.0D && !isBeingWatched()) {
+                this.setDeltaMovement(
+                        this.getDeltaMovement().x,
+                        0.2D,
+                        this.getDeltaMovement().z
+                );
+                setClimbing(true);
             } else {
-                return state.setAndContinue(WALK_ANIM);
+                setClimbing(false);
             }
         } else {
-            // 日ごとの異なるアイドルアニメーション
-            switch (getEvolutionStage()) {
-                case 1:
-                    return state.setAndContinue(IDLE2_ANIM);
-                case 2:
-                    return state.setAndContinue(IDLE3_ANIM);
-                default:
-                    return state.setAndContinue(IDLE1_ANIM);
-            }
+            setClimbing(false);
         }
     }
 
-    private PlayState actionAnimController(AnimationState<TungSahurEntity> state) {
-        if (isCurrentlyJumping && isJumping()) {
-            return state.setAndContinue(JUMPING_ANIM);
-        } else if (isCurrentlyThrowing && isThrowing()) {
-            return state.setAndContinue(BAT_THROW_ANIM);
-        } else if (isCurrentlyAttacking && isAttacking()) {
-            // 武器の有無で攻撃アニメーション切り替え
-            if (!this.getMainHandItem().isEmpty()) {
-                return state.setAndContinue(BAT_SWING_ANIM);
-            } else {
-                return state.setAndContinue(PUNCH_RIGHT_ANIM);
-            }
-        }
-
-        state.getController().forceAnimationReset();
-        return PlayState.STOP;
+    // 能力チェックメソッド
+    public boolean canAttack() {
+        return attackCooldown <= 0;
     }
 
-    @Override
-    protected void playStepSound(BlockPos pos, BlockState blockState) {
-        if (isSprinting()) {
-            this.playSound(SoundEvents.ZOMBIE_STEP, 0.8F, 1.2F);
-        } else {
-            this.playSound(SoundEvents.ZOMBIE_STEP, 0.6F, 1.0F);
-        }
+    public boolean canThrow() {
+        return throwCooldown <= 0 && getEvolutionStage() >= 1;
     }
 
-    @Override
-    protected SoundEvent getDeathSound() {
-        return SoundEvents.ZOMBIE_DEATH;
-    }
-
-    @Override
-    protected SoundEvent getHurtSound(DamageSource damageSource) {
-        return SoundEvents.ZOMBIE_HURT;
-    }
-
-    @Override
-    protected SoundEvent getAmbientSound() {
-        return SoundEvents.ZOMBIE_AMBIENT;
-    }
-
-    // スポーン条件
-    public static boolean checkTungSahurSpawnRules(EntityType<TungSahurEntity> entityType, LevelAccessor world,
-                                                   MobSpawnType spawnType, BlockPos pos, RandomSource random) {
-        if (!(world instanceof ServerLevelAccessor serverWorld)) {
-            return false;
-        }
-
-        if (!(world instanceof Level level)) {
-            return false;
-        }
-
-        long worldTime = level.getDayTime() % 24000;
-        boolean isNight = worldTime >= 13000 && worldTime <= 23000;
-        boolean isDark = world.getBrightness(LightLayer.BLOCK, pos) == 0;
-        Player nearestPlayer = world.getNearestPlayer(pos.getX(), pos.getY(), pos.getZ(), 32.0, false);
-        boolean rarityCheck = random.nextFloat() < 0.08F;
-
-        return isNight && isDark && nearestPlayer != null && rarityCheck &&
-                Monster.checkMonsterSpawnRules(entityType, serverWorld, spawnType, pos, random);
-    }
-
-    @Override
-    public EntityDimensions getDimensions(Pose pose) {
-        return super.getDimensions(pose).scale(getScaleFactor());
-    }
-
-    // NBTデータ保存・読み込み
-    @Override
-    public void addAdditionalSaveData(CompoundTag compound) {
-        super.addAdditionalSaveData(compound);
-        compound.putInt("EvolutionStage", getEvolutionStage());
-        compound.putFloat("ScaleFactor", getScaleFactor());
-        compound.putInt("AttackCooldown", attackCooldown);
-        compound.putInt("ThrowCooldown", throwCooldown);
-        compound.putInt("JumpCooldown", jumpCooldown);
-        compound.putBoolean("IsBeingWatched", isBeingWatched());
-        compound.putBoolean("IsClimbing", isClimbing());
-    }
-
-    @Override
-    public void readAdditionalSaveData(CompoundTag compound) {
-        super.readAdditionalSaveData(compound);
-        setEvolutionStage(compound.getInt("EvolutionStage"));
-        setScaleFactor(compound.getFloat("ScaleFactor"));
-        attackCooldown = compound.getInt("AttackCooldown");
-        throwCooldown = compound.getInt("ThrowCooldown");
-        jumpCooldown = compound.getInt("JumpCooldown");
-        setBeingWatched(compound.getBoolean("IsBeingWatched"));
-        setClimbing(compound.getBoolean("IsClimbing"));
-    }
-
-    @Override
-    public AnimatableInstanceCache getAnimatableInstanceCache() {
-        return this.geoCache;
+    public boolean canJump() {
+        return jumpCooldown <= 0 && getEvolutionStage() >= 1 && this.onGround();
     }
 
     // ゲッター・セッター
@@ -565,7 +473,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     }
 
     public void setEvolutionStage(int stage) {
-        this.entityData.set(EVOLUTION_STAGE, stage);
+        this.entityData.set(EVOLUTION_STAGE, Math.max(1, stage));
     }
 
     public float getScaleFactor() {
@@ -625,47 +533,202 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.entityData.set(IS_CLIMBING, climbing);
     }
 
+    // NBT保存・読み込み
     @Override
-    public boolean onClimbable() {
-        return isClimbing() || super.onClimbable();
+    public void addAdditionalSaveData(CompoundTag compound) {
+        super.addAdditionalSaveData(compound);
+        compound.putInt("EvolutionStage", this.getEvolutionStage());
+        compound.putFloat("ScaleFactor", this.getScaleFactor());
+        compound.putInt("AttackCooldown", attackCooldown);
+        compound.putInt("ThrowCooldown", throwCooldown);
+        compound.putInt("JumpCooldown", jumpCooldown);
+        compound.putBoolean("IsBeingWatched", this.isBeingWatched());
+        compound.putBoolean("IsClimbing", this.isClimbing());
+    }
+
+    @Override
+    public void readAdditionalSaveData(CompoundTag compound) {
+        super.readAdditionalSaveData(compound);
+        this.setEvolutionStage(Math.max(1, compound.getInt("EvolutionStage")));
+        this.setScaleFactor(compound.getFloat("ScaleFactor"));
+        attackCooldown = compound.getInt("AttackCooldown");
+        throwCooldown = compound.getInt("ThrowCooldown");
+        jumpCooldown = compound.getInt("JumpCooldown");
+        this.setBeingWatched(compound.getBoolean("IsBeingWatched"));
+        this.setClimbing(compound.getBoolean("IsClimbing"));
+    }
+
+    @Override
+    public AnimatableInstanceCache getAnimatableInstanceCache() {
+        return this.geoCache;
+    }
+
+    // GeckoLib アニメーション制御
+    @Override
+    public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
+        controllers.add(new AnimationController<>(this, "movement", 5, this::movementAnimController));
+        controllers.add(new AnimationController<>(this, "action", 0, this::actionAnimController));
+        controllers.add(new AnimationController<>(this, "death", 0, this::deathAnimController));
+    }
+
+    private PlayState movementAnimController(AnimationState<TungSahurEntity> state) {
+        // 死亡中またはアクション中は移動アニメーション停止
+        if (this.isDeadOrDying() || isCurrentlyAttacking || isCurrentlyThrowing || isCurrentlyJumping) {
+            return PlayState.STOP;
+        }
+
+        // 壁登り中
+        if (isClimbing()) {
+            return state.setAndContinue(CLIMBING_ANIM);
+        }
+
+        // 移動中のアニメーション
+        if (state.isMoving()) {
+            // ターゲットに応じた走行判定
+            boolean shouldSprint = shouldSprintToTarget();
+
+            if (shouldSprint || this.isSprinting()) {
+                this.setSprinting(true);
+                return state.setAndContinue(RUNNING_ANIM);
+            } else {
+                this.setSprinting(false);
+                return state.setAndContinue(WALKING_ANIM);
+            }
+        }
+
+        // 待機アニメーション（進化段階に応じて変更）
+        this.setSprinting(false);
+        return state.setAndContinue(getIdleAnimationByStage());
+    }
+
+    private PlayState actionAnimController(AnimationState<TungSahurEntity> state) {
+        // 死亡中は停止
+        if (this.isDeadOrDying()) {
+            return PlayState.STOP;
+        }
+
+        if (isCurrentlyThrowing) {
+            return state.setAndContinue(BAT_THROW_ANIM);
+        }
+
+        if (isCurrentlyJumping) {
+            return state.setAndContinue(JUMPING_ANIM);
+        }
+
+        if (isCurrentlyAttacking) {
+            ItemStack mainHand = this.getMainHandItem();
+            if (mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
+                return state.setAndContinue(BAT_SWING_ANIM);
+            } else {
+                return state.setAndContinue(PUNCH_ANIM);
+            }
+        }
+
+        return PlayState.STOP;
+    }
+
+    private PlayState deathAnimController(AnimationState<TungSahurEntity> state) {
+        if (this.isDeadOrDying()) {
+            return state.setAndContinue(DEATH_ANIM);
+        }
+        return PlayState.STOP;
     }
 
     /**
-     * 蜘蛛のような壁登り能力 - horizontalCollisionを利用
+     * 進化段階に応じた待機アニメーションを取得
      */
-    @Override
-    public void aiStep() {
-        super.aiStep();
+    private RawAnimation getIdleAnimationByStage() {
+        return switch (this.getEvolutionStage()) {
+            case 2 -> IDLE3_ANIM;  // 第三形態
+            case 1 -> IDLE2_ANIM;  // 第二形態
+            default -> IDLE1_ANIM; // 第一形態
+        };
+    }
 
-        // 壁登り状態の更新
-        if (this.horizontalCollision && this.getTarget() != null) {
-            double heightDiff = this.getTarget().getY() - this.getY();
-            if (heightDiff > 1.0D && !isBeingWatched()) {
-                // 壁に接触していて、ターゲットが上にいて、見られていない場合は登る
-                this.setDeltaMovement(
-                        this.getDeltaMovement().x,
-                        0.2D, // 上昇速度
-                        this.getDeltaMovement().z
-                );
-                setClimbing(true);
-            } else {
-                setClimbing(false);
+    /**
+     * ターゲットに応じてスプリントすべきかどうかを判定
+     */
+    private boolean shouldSprintToTarget() {
+        LivingEntity target = this.getTarget();
+        if (target == null) return false;
+
+        // ターゲットとの距離
+        double distance = this.distanceTo(target);
+
+        // ターゲットがプレイヤーで走っている場合
+        if (target instanceof Player player) {
+            // プレイヤーが走っている（スプリント中）場合
+            if (player.isSprinting()) {
+                return true;
             }
-        } else {
-            setClimbing(false);
+
+            // プレイヤーの移動速度が一定以上の場合
+            double playerSpeed = player.getDeltaMovement().horizontalDistanceSqr();
+            if (playerSpeed > 0.05D) { // 通常歩行より速い
+                return true;
+            }
         }
+
+        // 距離が離れている場合（5ブロック以上）
+        if (distance > 5.0D) {
+            return true;
+        }
+
+        // 高低差がある場合
+        double heightDiff = Math.abs(target.getY() - this.getY());
+        if (heightDiff > 2.0D) {
+            return true;
+        }
+
+        // ターゲットが逃げている場合（前回の位置より遠くなった）
+        CompoundTag nbt = this.getPersistentData();
+        if (nbt.contains("LastTargetDistance")) {
+            double lastDistance = nbt.getDouble("LastTargetDistance");
+            if (distance > lastDistance + 1.0D) { // 1ブロック以上離れた
+                nbt.putDouble("LastTargetDistance", distance);
+                return true;
+            }
+            nbt.putDouble("LastTargetDistance", distance);
+        } else {
+            nbt.putDouble("LastTargetDistance", distance);
+        }
+
+        // 見られていない場合は積極的に
+        if (!this.isBeingWatched()) {
+            return distance > 3.0D;
+        }
+
+        return false;
     }
 
-    // クールダウン確認メソッド
-    public boolean canAttack() {
-        return attackCooldown <= 0;
+    // スポーンルール
+    public static boolean checkTungSahurSpawnRules(EntityType<TungSahurEntity> entityType,
+                                                   ServerLevelAccessor level, MobSpawnType spawnType,
+                                                   BlockPos pos, RandomSource random) {
+        return Monster.checkMonsterSpawnRules(entityType, level, spawnType, pos, random) &&
+                level.getBrightness(LightLayer.BLOCK, pos) <= 7;
+    }
+}
+
+/**
+ * 改善されたランダム徘徊ゴール
+ */
+class ImprovedRandomStrollGoal extends RandomStrollGoal {
+    public ImprovedRandomStrollGoal(PathfinderMob mob, double speedModifier) {
+        super(mob, speedModifier);
     }
 
-    public boolean canThrow() {
-        return throwCooldown <= 0 && getEvolutionStage() >= 1;
-    }
+    @Override
+    protected Vec3 getPosition() {
+        Vec3 basePos = super.getPosition();
+        if (basePos == null) return null;
 
-    public boolean canJump() {
-        return jumpCooldown <= 0 && getEvolutionStage() >= 1 && this.onGround();
+        BlockPos targetPos = BlockPos.containing(basePos);
+        int heightDiff = targetPos.getY() - this.mob.blockPosition().getY();
+        if (heightDiff <= 1 && heightDiff >= -3) {
+            return basePos;
+        }
+
+        return null;
     }
 }

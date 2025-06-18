@@ -1,11 +1,13 @@
-// TungSahurSmartMoveToTargetGoal.java - インテリジェントな移動ゴール
+// TungSahurSmartMoveToTargetGoal.java - 強化版インテリジェント移動ゴール
 package com.tungsahur.mod.entity.goals;
 
 import com.tungsahur.mod.entity.TungSahurEntity;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.level.pathfinder.Path;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.EnumSet;
 
@@ -18,6 +20,8 @@ public class TungSahurSmartMoveToTargetGoal extends Goal {
     private double targetX, targetY, targetZ;
     private int ticksStuck = 0;
     private int lastPathRecalc = 0;
+    private int consecutiveFailures = 0;
+    private Vec3 lastPosition = Vec3.ZERO;
 
     public TungSahurSmartMoveToTargetGoal(TungSahurEntity tungSahur, double speedModifier) {
         this.tungSahur = tungSahur;
@@ -55,79 +59,50 @@ public class TungSahurSmartMoveToTargetGoal extends Goal {
     public void start() {
         this.delayCounter = 0;
         this.ticksStuck = 0;
-        this.lastPathRecalc = 0;
+        this.consecutiveFailures = 0;
+        this.lastPosition = this.tungSahur.position();
         updatePath();
     }
 
     @Override
     public void stop() {
         this.target = null;
-        this.tungSahur.getNavigation().stop();
         this.path = null;
+        this.tungSahur.getNavigation().stop();
+        this.consecutiveFailures = 0;
     }
 
     @Override
     public void tick() {
         if (this.target == null) return;
 
-        // ターゲットを見る
         this.tungSahur.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
 
         double distance = this.tungSahur.distanceTo(this.target);
-
-        // 距離に応じた戦略的な移動
-        if (distance <= 3.5D) {
-            // 近すぎる場合は少し離れる
-            moveAwayFromTarget();
-        } else if (distance >= 8.0D && this.tungSahur.getEvolutionStage() >= 1) {
-            // 遠距離では投擲攻撃のために停止する場合もある
-            if (this.tungSahur.canThrow() && this.tungSahur.hasLineOfSight(this.target)) {
-                this.tungSahur.getNavigation().stop();
-                return;
-            }
-        }
-
-        // パス更新の判定
-        this.delayCounter++;
-        this.lastPathRecalc++;
-
         boolean shouldUpdatePath = false;
 
-        // 定期的なパス更新
-        if (this.delayCounter >= 10) {
-            this.delayCounter = 0;
+        // パス再計算の条件チェック
+        this.lastPathRecalc++;
+        if (this.lastPathRecalc > 40) { // 2秒ごと
             shouldUpdatePath = true;
         }
 
         // ターゲットが大きく移動した場合
-        if (this.lastPathRecalc >= 20) {
-            double dx = this.target.getX() - this.targetX;
-            double dy = this.target.getY() - this.targetY;
-            double dz = this.target.getZ() - this.targetZ;
-            double distanceMoved = dx * dx + dy * dy + dz * dz;
+        double targetMoveDistance = Math.sqrt(
+                Math.pow(this.target.getX() - this.targetX, 2) +
+                        Math.pow(this.target.getY() - this.targetY, 2) +
+                        Math.pow(this.target.getZ() - this.targetZ, 2)
+        );
 
-            if (distanceMoved > 4.0D) {
-                shouldUpdatePath = true;
-            }
+        if (targetMoveDistance > 3.0D) {
+            shouldUpdatePath = true;
         }
 
-        // スタック検出
-        if (this.tungSahur.getDeltaMovement().horizontalDistanceSqr() < 0.01D) {
-            this.ticksStuck++;
-            if (this.ticksStuck > 20) {
-                shouldUpdatePath = true;
-                this.ticksStuck = 0;
+        // スタック検出とジャンプ処理
+        handleStuckDetection();
 
-                // スタック時のジャンプ試行
-                if (this.tungSahur.onGround() && this.tungSahur.getRandom().nextFloat() < 0.3F) {
-                    this.tungSahur.setDeltaMovement(
-                            this.tungSahur.getDeltaMovement().add(0, 0.4D, 0)
-                    );
-                }
-            }
-        } else {
-            this.ticksStuck = 0;
-        }
+        // 障害物回避処理
+        handleObstacleAvoidance();
 
         if (shouldUpdatePath) {
             updatePath();
@@ -135,6 +110,142 @@ public class TungSahurSmartMoveToTargetGoal extends Goal {
 
         // 速度調整
         adjustMovementSpeed(distance);
+    }
+
+    /**
+     * スタック検出とジャンプ処理
+     */
+    private void handleStuckDetection() {
+        Vec3 currentPos = this.tungSahur.position();
+        double movementDistance = this.lastPosition.distanceTo(currentPos);
+
+        if (movementDistance < 0.1D) {
+            this.ticksStuck++;
+
+            if (this.ticksStuck > 20) { // 1秒間動かない
+                // 前方の障害物をチェック
+                Vec3 lookDirection = this.tungSahur.getLookAngle();
+                BlockPos frontPos = this.tungSahur.blockPosition().offset(
+                        (int)(lookDirection.x * 2), 0, (int)(lookDirection.z * 2)
+                );
+
+                // 段差がある場合はジャンプ
+                if (canJumpOverObstacle(frontPos)) {
+                    performSmartJump();
+                } else {
+                    // ジャンプできない場合は迂回パスを探す
+                    findAlternatePath();
+                }
+
+                this.ticksStuck = 0;
+            }
+        } else {
+            this.ticksStuck = 0;
+        }
+
+        this.lastPosition = currentPos;
+    }
+
+    /**
+     * 障害物回避処理
+     */
+    private void handleObstacleAvoidance() {
+        if (this.tungSahur.horizontalCollision) {
+            // 水平衝突時の処理
+            Vec3 lookDirection = this.tungSahur.getLookAngle();
+            BlockPos frontPos = this.tungSahur.blockPosition().offset(
+                    (int)lookDirection.x, 0, (int)lookDirection.z
+            );
+
+            // 1ブロック高の障害物なら自動ジャンプ
+            if (canJumpOverObstacle(frontPos)) {
+                performSmartJump();
+            } else {
+                // より高い障害物の場合は登攀を試行
+                if (this.tungSahur.canClimbWalls()) {
+                    this.tungSahur.setClimbing(true);
+                }
+            }
+        }
+    }
+
+    /**
+     * ジャンプ可能な障害物かチェック
+     */
+    private boolean canJumpOverObstacle(BlockPos obstaclePos) {
+        // 障害物の高さをチェック
+        int heightCheck = 0;
+        for (int y = 0; y < 3; y++) {
+            if (!this.tungSahur.level().getBlockState(obstaclePos.above(y)).isAir()) {
+                heightCheck++;
+            } else {
+                break;
+            }
+        }
+
+        // 1-2ブロックの高さならジャンプ可能
+        return heightCheck <= 2 && heightCheck > 0;
+    }
+
+    /**
+     * スマートジャンプの実行
+     */
+    private void performSmartJump() {
+        if (this.tungSahur.onGround()) {
+            // ジャンプ力を調整（進化段階に応じて）
+            double jumpPower = 0.42D + (this.tungSahur.getEvolutionStage() * 0.1D);
+
+            Vec3 currentVelocity = this.tungSahur.getDeltaMovement();
+            Vec3 forwardDirection = this.tungSahur.getLookAngle().scale(0.2D);
+
+            this.tungSahur.setDeltaMovement(
+                    currentVelocity.x + forwardDirection.x,
+                    jumpPower,
+                    currentVelocity.z + forwardDirection.z
+            );
+
+            this.tungSahur.hasImpulse = true;
+        }
+    }
+
+    /**
+     * 代替パスの探索
+     */
+    private void findAlternatePath() {
+        if (this.target == null) return;
+
+        PathNavigation navigation = this.tungSahur.getNavigation();
+
+        // 左右に迂回するパスを試行
+        Vec3 toTarget = this.target.position().subtract(this.tungSahur.position()).normalize();
+        Vec3 leftDirection = new Vec3(-toTarget.z, 0, toTarget.x).scale(3.0D);
+        Vec3 rightDirection = new Vec3(toTarget.z, 0, -toTarget.x).scale(3.0D);
+
+        // 左側迂回を試行
+        Vec3 leftPos = this.tungSahur.position().add(leftDirection);
+        Path leftPath = navigation.createPath(leftPos.x, leftPos.y, leftPos.z, 1);
+
+        if (leftPath != null && leftPath.canReach()) {
+            navigation.moveTo(leftPath, this.speedModifier);
+            return;
+        }
+
+        // 右側迂回を試行
+        Vec3 rightPos = this.tungSahur.position().add(rightDirection);
+        Path rightPath = navigation.createPath(rightPos.x, rightPos.y, rightPos.z, 1);
+
+        if (rightPath != null && rightPath.canReach()) {
+            navigation.moveTo(rightPath, this.speedModifier);
+            return;
+        }
+
+        // 後退してからアプローチ
+        Vec3 backwardPos = this.tungSahur.position().subtract(toTarget.scale(2.0D));
+        Path backwardPath = navigation.createPath(backwardPos.x, backwardPos.y, backwardPos.z, 1);
+
+        if (backwardPath != null && backwardPath.canReach()) {
+            navigation.moveTo(backwardPath, this.speedModifier * 0.8D);
+        }
     }
 
     private void updatePath() {
@@ -167,51 +278,50 @@ public class TungSahurSmartMoveToTargetGoal extends Goal {
 
         // パスの生成
         if (targetDistance < distance) {
-            // ターゲットに近づく
-            this.path = navigation.createPath(this.target, 0);
+            // 直接ターゲットに向かう
+            this.path = navigation.createPath(this.target, 1);
         } else {
-            // 適切な距離を維持
-            this.path = navigation.createPath(this.targetX, this.targetY, this.targetZ, 0);
+            // 距離を保つための位置を計算
+            Vec3 direction = this.tungSahur.position().subtract(this.target.position()).normalize();
+            Vec3 keepDistancePos = this.target.position().add(direction.scale(targetDistance));
+
+            this.path = navigation.createPath(keepDistancePos.x, keepDistancePos.y, keepDistancePos.z, 1);
         }
 
-        if (this.path != null) {
+        if (this.path != null && this.path.canReach()) {
             navigation.moveTo(this.path, this.speedModifier);
-        }
-    }
+            this.consecutiveFailures = 0;
+        } else {
+            this.consecutiveFailures++;
 
-    private void moveAwayFromTarget() {
-        // ターゲットから離れる方向に移動
-        double dx = this.tungSahur.getX() - this.target.getX();
-        double dz = this.tungSahur.getZ() - this.target.getZ();
-        double length = Math.sqrt(dx * dx + dz * dz);
-
-        if (length > 0) {
-            double moveDistance = 3.0D;
-            double newX = this.tungSahur.getX() + (dx / length) * moveDistance;
-            double newZ = this.tungSahur.getZ() + (dz / length) * moveDistance;
-
-            this.tungSahur.getNavigation().moveTo(newX, this.tungSahur.getY(), newZ, this.speedModifier * 0.8D);
+            // 連続失敗時は代替手段を使用
+            if (this.consecutiveFailures > 3) {
+                findAlternatePath();
+            }
         }
     }
 
     private void adjustMovementSpeed(double distance) {
-        double speedMultiplier = this.speedModifier;
+        double baseSpeed = this.speedModifier;
 
         // 距離に応じた速度調整
-        if (distance > 12.0D) {
-            // 遠距離では高速移動
-            speedMultiplier *= 1.3D;
-        } else if (distance < 5.0D) {
-            // 近距離では慎重に移動
-            speedMultiplier *= 0.8D;
+        if (distance > 15.0D) {
+            baseSpeed *= 1.2D; // 遠い場合は高速移動
+        } else if (distance < 6.0D) {
+            baseSpeed *= 0.8D; // 近い場合は慎重に
         }
 
         // 進化段階による調整
-        speedMultiplier *= (1.0D + this.tungSahur.getEvolutionStage() * 0.15D);
+        baseSpeed *= (1.0D + this.tungSahur.getEvolutionStage() * 0.1D);
 
-        // 現在のナビゲーションの速度を更新
-        if (this.tungSahur.getNavigation().isInProgress()) {
-            this.tungSahur.getNavigation().setSpeedModifier(speedMultiplier);
+        // 見られている時の速度低下
+        if (this.tungSahur.isBeingWatched()) {
+            baseSpeed *= 0.3D;
+        }
+
+        // ナビゲーションの速度を更新
+        if (this.path != null) {
+            this.tungSahur.getNavigation().setSpeedModifier(baseSpeed);
         }
     }
 

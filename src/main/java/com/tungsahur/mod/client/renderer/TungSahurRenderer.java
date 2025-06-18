@@ -1,9 +1,8 @@
-// TungSahurRenderer.java - 修正版レンダラー
+// TungSahurRenderer.java - 完全修正版
 package com.tungsahur.mod.client.renderer;
 
 import software.bernie.geckolib.renderer.GeoEntityRenderer;
 import software.bernie.geckolib.cache.object.BakedGeoModel;
-import software.bernie.geckolib.renderer.DynamicGeoEntityRenderer;
 import software.bernie.geckolib.cache.object.GeoBone;
 
 import net.minecraft.resources.ResourceLocation;
@@ -32,6 +31,8 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
 
         // SahurItemLayerを追加してバットの表示を処理
         this.addRenderLayer(new SahurItemLayer<>(this));
+
+        TungSahurMod.LOGGER.info("TungSahurRenderer初期化完了");
     }
 
     @Override
@@ -73,6 +74,8 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
         if (mainHand.isEmpty() || !mainHand.is(ModItems.TUNG_SAHUR_BAT.get())) {
             ItemStack batStack = createBatForEntity(entity);
             entity.setItemSlot(EquipmentSlot.MAINHAND, batStack);
+
+            TungSahurMod.LOGGER.debug("TungSahurにバットを強制装備しました");
         }
     }
 
@@ -131,6 +134,22 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
         // レンダリング前にバットの装備を確認
         ensureBatIsEquipped(entity);
 
+        // デバッグ情報をログに出力
+        if (entity.tickCount % 100 == 0) {
+            TungSahurMod.LOGGER.debug("TungSahurレンダリング中: Stage={}, Scale={}",
+                    entity.getEvolutionStage(), entity.getScaleFactor());
+        }
+
         super.render(entity, entityYaw, partialTick, poseStack, bufferSource, packedLight);
+    }
+
+    @Override
+    public ResourceLocation getTextureLocation(TungSahurEntity entity) {
+        // デバッグ用：テクスチャパスをログに出力
+        ResourceLocation texture = super.getTextureLocation(entity);
+        if (entity.tickCount == 1) {
+            TungSahurMod.LOGGER.info("使用中のテクスチャ: {}", texture);
+        }
+        return texture;
     }
 }

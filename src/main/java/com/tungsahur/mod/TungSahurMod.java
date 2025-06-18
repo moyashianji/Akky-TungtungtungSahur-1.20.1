@@ -1,3 +1,4 @@
+// TungSahurMod.java - 完全修正版（レンダラー登録の二重回避）
 package com.tungsahur.mod;
 
 import com.mojang.logging.LogUtils;
@@ -7,7 +8,6 @@ import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.events.BedSleepEvent;
 import com.tungsahur.mod.events.DayCounterEvents;
 import com.tungsahur.mod.items.ModItems;
-import com.tungsahur.mod.saveddata.DayCountSavedData;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.entity.SpawnPlacements;
 import net.minecraft.world.item.CreativeModeTab;
@@ -51,6 +51,8 @@ public class TungSahurMod {
     public TungSahurMod() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
+        LOGGER.info("TungSahurMod初期化開始");
+
         // レジスタ登録
         ModEntities.register(modEventBus);
         ModItems.register(modEventBus);
@@ -69,42 +71,63 @@ public class TungSahurMod {
 
         // コンフィグ登録
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+
+        LOGGER.info("TungSahurMod初期化完了");
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("Tung Tung Tung Sahur Mod - 恐怖の始まり...");
+
+        event.enqueueWork(() -> {
+            // サーバー側の共通セットアップ
+            LOGGER.info("TungSahur共通セットアップ完了");
+        });
     }
 
     private void addCreative(BuildCreativeModeTabContentsEvent event) {
         if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
             event.accept(ModItems.TUNG_SAHUR_SPAWN_EGG);
+            LOGGER.debug("TungSahurスポーンエッグをクリエイティブタブに追加");
         }
     }
 
     @SubscribeEvent
     public void registerAttributes(EntityAttributeCreationEvent event) {
-        event.put(ModEntities.TUNG_SAHUR.get(), TungSahurEntity.createAttributes().build());
+        try {
+            event.put(ModEntities.TUNG_SAHUR.get(), TungSahurEntity.createAttributes().build());
+            LOGGER.info("TungSahurEntityの属性登録完了");
+        } catch (Exception e) {
+            LOGGER.error("TungSahurEntity属性登録中にエラー発生: ", e);
+        }
     }
 
     @SubscribeEvent
     public void registerSpawnPlacements(SpawnPlacementRegisterEvent event) {
-        event.register(ModEntities.TUNG_SAHUR.get(),
-                SpawnPlacements.Type.ON_GROUND,
-                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                TungSahurEntity::checkTungSahurSpawnRules, // メソッド名を修正
-                SpawnPlacementRegisterEvent.Operation.REPLACE);
+        try {
+            event.register(ModEntities.TUNG_SAHUR.get(),
+                    SpawnPlacements.Type.ON_GROUND,
+                    Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                    TungSahurEntity::checkTungSahurSpawnRules,
+                    SpawnPlacementRegisterEvent.Operation.REPLACE);
+            LOGGER.info("TungSahurEntityのスポーン配置ルール登録完了");
+        } catch (Exception e) {
+            LOGGER.error("TungSahurEntityスポーン配置登録中にエラー発生: ", e);
+        }
     }
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         TungSahurCommands.register(event.getDispatcher());
+        LOGGER.info("TungSahurコマンド登録完了");
     }
 
+    // クライアント側のイベントハンドラ（ClientSetup.javaとの二重登録を回避）
     @Mod.EventBusSubscriber(modid = MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
     public static class ClientModEvents {
         @SubscribeEvent
         public static void onClientSetup(FMLClientSetupEvent event) {
-            LOGGER.info("Tung Sahur クライアントセットアップ完了");
+            // ClientSetup.javaで処理されるため、ここでは最小限のログのみ
+            LOGGER.info("TungSahur メインクラス側クライアントセットアップ完了");
         }
     }
 }
