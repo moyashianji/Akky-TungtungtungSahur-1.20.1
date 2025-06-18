@@ -1,3 +1,4 @@
+// TungSahurRenderer.java - 修正版レンダラー
 package com.tungsahur.mod.client.renderer;
 
 import software.bernie.geckolib.renderer.GeoEntityRenderer;
@@ -23,12 +24,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 
 import javax.annotation.Nullable;
 
-public class TungSahurRenderer extends DynamicGeoEntityRenderer<TungSahurEntity> {
-
-    // 3つの形態のテクスチャ
-    private static final ResourceLocation STAGE_1_TEXTURE = new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage1.png");
-    private static final ResourceLocation STAGE_2_TEXTURE = new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage2.png");
-    private static final ResourceLocation STAGE_3_TEXTURE = new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage3.png");
+public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
 
     public TungSahurRenderer(EntityRendererProvider.Context renderManager) {
         super(renderManager, new TungSahurModel());
@@ -39,22 +35,15 @@ public class TungSahurRenderer extends DynamicGeoEntityRenderer<TungSahurEntity>
     }
 
     @Override
-    public ResourceLocation getTextureLocation(TungSahurEntity entity) {
-        int stage = entity.getEvolutionStage();
-        return switch (stage) {
-            case 1 -> STAGE_2_TEXTURE;
-            case 2 -> STAGE_3_TEXTURE;
-            default -> STAGE_1_TEXTURE;
-        };
+    public RenderType getRenderType(TungSahurEntity animatable, ResourceLocation texture,
+                                    @Nullable MultiBufferSource bufferSource, float partialTick) {
+        return RenderType.entityCutoutNoCull(texture);
     }
 
     @Override
-    public RenderType getRenderType(TungSahurEntity animatable, ResourceLocation texture, MultiBufferSource bufferSource, float partialTick) {
-        return RenderType.entityTranslucent(getTextureLocation(animatable));
-    }
-
-    @Override
-    public void preRender(PoseStack poseStack, TungSahurEntity entity, BakedGeoModel model, MultiBufferSource bufferSource, VertexConsumer buffer, boolean isReRender, float partialTick, int packedLight, int packedOverlay, float red,
+    public void preRender(PoseStack poseStack, TungSahurEntity entity, BakedGeoModel model,
+                          MultiBufferSource bufferSource, VertexConsumer buffer, boolean isReRender,
+                          float partialTick, int packedLight, int packedOverlay, float red,
                           float green, float blue, float alpha) {
 
         // バットが装備されているかチェックし、されていなければ強制的に装備
@@ -62,8 +51,7 @@ public class TungSahurRenderer extends DynamicGeoEntityRenderer<TungSahurEntity>
 
         // 進化段階に応じたスケール調整
         float scale = entity.getScaleFactor();
-        this.scaleHeight = scale;
-        this.scaleWidth = scale;
+        poseStack.scale(scale, scale, scale);
 
         // 見られている時の震え効果
         if (entity.isBeingWatched()) {
@@ -71,7 +59,8 @@ public class TungSahurRenderer extends DynamicGeoEntityRenderer<TungSahurEntity>
             poseStack.translate(shake, 0, shake);
         }
 
-        super.preRender(poseStack, entity, model, bufferSource, buffer, isReRender, partialTick, packedLight, packedOverlay, red, green, blue, alpha);
+        super.preRender(poseStack, entity, model, bufferSource, buffer, isReRender,
+                partialTick, packedLight, packedOverlay, red, green, blue, alpha);
     }
 
     /**
@@ -102,16 +91,21 @@ public class TungSahurRenderer extends DynamicGeoEntityRenderer<TungSahurEntity>
         batStack.getTag().putInt("TungSahurStage", evolutionStage);
         batStack.getTag().putBoolean("TungSahurOwned", true);
         batStack.getTag().putBoolean("ForceDisplay", true);
+        batStack.getTag().putBoolean("AlwaysVisible", true);
+        batStack.getTag().putBoolean("ForceRender", true);
 
         // 進化段階に応じた強化
         switch (evolutionStage) {
             case 1:
                 batStack.getTag().putInt("Damage", 15);
                 batStack.getTag().putString("BatType", "Enhanced");
+                batStack.getTag().putInt("BloodLevel", 1);
                 break;
             case 2:
                 batStack.getTag().putInt("Damage", 25);
                 batStack.getTag().putString("BatType", "Legendary");
+                batStack.getTag().putBoolean("Cursed", true);
+                batStack.getTag().putInt("BloodLevel", 3);
                 break;
             default:
                 batStack.getTag().putInt("Damage", 8);

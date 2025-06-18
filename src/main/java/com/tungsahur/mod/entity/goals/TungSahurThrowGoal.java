@@ -1,5 +1,4 @@
-
-// TungSahurThrowGoal.java - 投擲攻撃にパーティクル追加
+// TungSahurThrowGoal.java - 投擲攻撃ゴール（2日目以降）
 package com.tungsahur.mod.entity.goals;
 
 import com.tungsahur.mod.entity.TungSahurEntity;
@@ -15,8 +14,9 @@ import java.util.EnumSet;
 public class TungSahurThrowGoal extends Goal {
     private final TungSahurEntity tungSahur;
     private LivingEntity target;
-    private int throwCooldown = 0;
-    private int throwChargeTime = 0;
+    private int chargeTime = 0;
+    private int aimTime = 0;
+    private boolean isCharging = false;
 
     public TungSahurThrowGoal(TungSahurEntity tungSahur) {
         this.tungSahur = tungSahur;
@@ -28,145 +28,125 @@ public class TungSahurThrowGoal extends Goal {
         this.target = this.tungSahur.getTarget();
         if (this.target == null) return false;
 
+        // 2日目以降のみ使用可能
+        if (this.tungSahur.getEvolutionStage() < 1) return false;
+
         double distance = this.tungSahur.distanceTo(this.target);
-        return distance > 8.0D && distance < 32.0D && this.throwCooldown <= 0 &&
-                this.tungSahur.getEvolutionStage() >= 1;
+
+        // 中距離から遠距離での使用
+        return distance >= 6.0D && distance <= 20.0D &&
+                this.tungSahur.canThrow() &&
+                this.tungSahur.hasLineOfSight(this.target);
+    }
+
+    @Override
+    public boolean canContinueToUse() {
+        if (this.target == null || !this.target.isAlive()) return false;
+        if (this.tungSahur.getEvolutionStage() < 1) return false;
+
+        double distance = this.tungSahur.distanceTo(this.target);
+        return distance >= 4.0D && distance <= 25.0D && this.tungSahur.hasLineOfSight(this.target);
     }
 
     @Override
     public void start() {
-        this.throwChargeTime = 30;
-        spawnPrepareThrowParticles();
+        this.chargeTime = 20 + this.tungSahur.getRandom().nextInt(20); // 1-2秒のチャージ
+        this.aimTime = 0;
+        this.isCharging = true;
+
+        // チャージ開始音
+        this.tungSahur.level().playSound(null, this.tungSahur.blockPosition(),
+                SoundEvents.CROSSBOW_LOADING_START, SoundSource.HOSTILE, 0.8F, 0.8F);
+
+        // チャージ開始パーティクル
+        spawnChargeParticles();
+    }
+
+    @Override
+    public void stop() {
+        this.chargeTime = 0;
+        this.aimTime = 0;
+        this.isCharging = false;
+        this.tungSahur.getNavigation().stop();
     }
 
     @Override
     public void tick() {
         if (this.target == null) return;
 
+        // ターゲットを見る
         this.tungSahur.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
 
-        if (this.throwChargeTime > 0) {
-            this.throwChargeTime--;
+        if (this.isCharging) {
+            // チャージ中は移動停止
             this.tungSahur.getNavigation().stop();
 
-            // チャージ中のパーティクル
-            if (this.throwChargeTime % 3 == 0) {
-                spawnChargeUpParticles();
+            this.chargeTime--;
+            this.aimTime++;
+
+            // チャージ中のパーティクル効果
+            if (this.aimTime % 5 == 0) {
+                spawnChargeParticles();
             }
-        } else {
-            performStylishThrow();
-            this.throwCooldown = 120;
-            this.stop();
-        }
 
-        if (this.throwCooldown > 0) {
-            this.throwCooldown--;
-        }
-    }
-
-    private void spawnPrepareThrowParticles() {
-        if (tungSahur.level() instanceof ServerLevel serverLevel) {
-            // 準備段階の光の柱
-            for (int i = 0; i < 15; i++) {
-                serverLevel.sendParticles(ParticleTypes.END_ROD,
-                        tungSahur.getX(), tungSahur.getY() + i * 0.3, tungSahur.getZ(),
-                        1, 0.1, 0.0, 0.1, 0.0);
+            // チャージ完了時の処理
+            if (this.chargeTime <= 0) {
+                executeThrow();
+                this.isCharging = false;
             }
         }
     }
 
-    private void spawnChargeUpParticles() {
-        if (tungSahur.level() instanceof ServerLevel serverLevel) {
-            // 腕周りの電撃エフェクト
-            double armX = tungSahur.getX() - Math.sin(Math.toRadians(tungSahur.getYRot() + 90)) * 0.8;
-            double armZ = tungSahur.getZ() + Math.cos(Math.toRadians(tungSahur.getYRot() + 90)) * 0.8;
-            double armY = tungSahur.getY() + 1.5;
+    private void executeThrow() {
+        if (this.target != null && this.tungSahur.canThrow()) {
+            // 投擲実行
+            this.tungSahur.performThrowAttack(this.target);
 
-            for (int i = 0; i < 5; i++) {
-                double offsetX = (serverLevel.random.nextDouble() - 0.5) * 0.6;
-                double offsetY = (serverLevel.random.nextDouble() - 0.5) * 0.6;
-                double offsetZ = (serverLevel.random.nextDouble() - 0.5) * 0.6;
+            // 投擲音
+            this.tungSahur.level().playSound(null, this.tungSahur.blockPosition(),
+                    SoundEvents.CROSSBOW_SHOOT, SoundSource.HOSTILE, 1.0F, 1.2F);
 
-                serverLevel.sendParticles(ParticleTypes.ELECTRIC_SPARK,
-                        armX + offsetX, armY + offsetY, armZ + offsetZ,
-                        1, 0.0, 0.0, 0.0, 0.1);
-                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                        armX + offsetX, armY + offsetY, armZ + offsetZ,
-                        1, 0.0, 0.1, 0.0, 0.0);
-            }
-
-            // エネルギー収束パーティクル
-            for (int i = 0; i < 8; i++) {
-                double angle = i * Math.PI / 4;
-                double radius = 2.0 - (30 - throwChargeTime) * 0.06;
-                double x = armX + Math.cos(angle) * radius;
-                double z = armZ + Math.sin(angle) * radius;
-
-                serverLevel.sendParticles(ParticleTypes.WITCH,
-                        x, armY, z, 1,
-                        (armX - x) * 0.1, 0.0, (armZ - z) * 0.1, 0.0);
-            }
+            // 投擲時のパーティクル
+            spawnThrowParticles();
         }
     }
 
-    private void performStylishThrow() {
-        if (tungSahur.level() instanceof ServerLevel serverLevel) {
-            // 投擲瞬間の爆発エフェクト
-            spawnThrowExplosion(serverLevel);
+    private void spawnChargeParticles() {
+        if (this.tungSahur.level() instanceof ServerLevel serverLevel) {
+            // チャージ中の赤いパーティクル
+            for (int i = 0; i < 3; i++) {
+                double x = this.tungSahur.getX() + (this.tungSahur.getRandom().nextDouble() - 0.5) * 1.5;
+                double y = this.tungSahur.getY() + this.tungSahur.getBbHeight() * 0.7 +
+                        (this.tungSahur.getRandom().nextDouble() - 0.5) * 0.5;
+                double z = this.tungSahur.getZ() + (this.tungSahur.getRandom().nextDouble() - 0.5) * 1.5;
 
-            // 投擲音強化
-            serverLevel.playSound(null, tungSahur.blockPosition(),
-                    SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.HOSTILE, 1.0F, 1.2F);
-            serverLevel.playSound(null, tungSahur.blockPosition(),
-                    SoundEvents.WITHER_SHOOT, SoundSource.HOSTILE, 0.7F, 0.8F);
+                serverLevel.sendParticles(ParticleTypes.ANGRY_VILLAGER,
+                        x, y, z, 1, 0.0, 0.1, 0.0, 0.0);
+            }
+
+            // 手元のエネルギーパーティクル
+            serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
+                    this.tungSahur.getX(), this.tungSahur.getY() + 1.2, this.tungSahur.getZ(),
+                    2, 0.3, 0.1, 0.3, 0.1);
         }
-
-        this.tungSahur.performThrowAttack(this.target);
     }
 
-    private void spawnThrowExplosion(ServerLevel serverLevel) {
-        double armX = tungSahur.getX() - Math.sin(Math.toRadians(tungSahur.getYRot() + 90)) * 0.8;
-        double armZ = tungSahur.getZ() + Math.cos(Math.toRadians(tungSahur.getYRot() + 90)) * 0.8;
-        double armY = tungSahur.getY() + 1.5;
+    private void spawnThrowParticles() {
+        if (this.tungSahur.level() instanceof ServerLevel serverLevel) {
+            // 投擲時の煙パーティクル
+            serverLevel.sendParticles(ParticleTypes.POOF,
+                    this.tungSahur.getX(), this.tungSahur.getY() + 1.0, this.tungSahur.getZ(),
+                    8, 0.5, 0.3, 0.5, 0.1);
 
-        // 爆発の中心
-        serverLevel.sendParticles(ParticleTypes.EXPLOSION,
-                armX, armY, armZ, 3, 0.2, 0.2, 0.2, 0.0);
-
-        // 放射状のパーティクル
-        for (int i = 0; i < 20; i++) {
-            double angle = i * Math.PI / 10;
-            double velocityX = Math.cos(angle) * 0.8;
-            double velocityZ = Math.sin(angle) * 0.8;
-            double velocityY = tungSahur.level().random.nextDouble() * 0.4 + 0.2;
-
-            serverLevel.sendParticles(ParticleTypes.FLAME,
-                    armX, armY, armZ, 1, velocityX, velocityY, velocityZ, 0.1);
-            serverLevel.sendParticles(ParticleTypes.SOUL,
-                    armX, armY, armZ, 1, velocityX * 0.5, velocityY, velocityZ * 0.5, 0.0);
-        }
-
-        // 衝撃波リング
-        for (int ring = 1; ring <= 2; ring++) {
-            for (int i = 0; i < 12; i++) {
-                double angle = i * Math.PI / 6;
-                double x = armX + Math.cos(angle) * ring * 1.5;
-                double z = armZ + Math.sin(angle) * ring * 1.5;
-
-                serverLevel.sendParticles(ParticleTypes.SONIC_BOOM,
-                        x, armY, z, 1, 0.0, 0.0, 0.0, 0.0);
-            }
+            // 威力を示すパーティクル
+            serverLevel.sendParticles(ParticleTypes.CRIT,
+                    this.tungSahur.getX(), this.tungSahur.getY() + 1.2, this.tungSahur.getZ(),
+                    6, 0.4, 0.2, 0.4, 0.2);
         }
     }
 
     @Override
-    public boolean canContinueToUse() {
-        return this.target != null && this.target.isAlive() && this.throwChargeTime > 0;
-    }
-
-    @Override
-    public void stop() {
-        this.target = null;
-        this.throwChargeTime = 0;
+    public boolean requiresUpdateEveryTick() {
+        return true;
     }
 }

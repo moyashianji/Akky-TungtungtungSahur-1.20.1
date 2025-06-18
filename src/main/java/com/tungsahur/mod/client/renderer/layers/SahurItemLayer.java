@@ -1,7 +1,8 @@
+// SahurItemLayer.java - 修正版アイテムレイヤー
 package com.tungsahur.mod.client.renderer.layers;
 
 import software.bernie.geckolib.core.animatable.GeoAnimatable;
-import software.bernie.geckolib.renderer.DynamicGeoEntityRenderer;
+import software.bernie.geckolib.renderer.GeoEntityRenderer;
 import software.bernie.geckolib.renderer.layer.BlockAndItemGeoLayer;
 import software.bernie.geckolib.cache.object.GeoBone;
 
@@ -21,9 +22,9 @@ import com.tungsahur.mod.items.ModItems;
 import javax.annotation.Nullable;
 
 public class SahurItemLayer<T extends TungSahurEntity & GeoAnimatable> extends BlockAndItemGeoLayer<T> {
-    private final DynamicGeoEntityRenderer<T> renderer;
+    private final GeoEntityRenderer<T> renderer;
 
-    public SahurItemLayer(DynamicGeoEntityRenderer<T> renderer) {
+    public SahurItemLayer(GeoEntityRenderer<T> renderer) {
         super(renderer);
         this.renderer = renderer;
     }
@@ -43,119 +44,130 @@ public class SahurItemLayer<T extends TungSahurEntity & GeoAnimatable> extends B
         }
 
         // sahurが常にバットを持っているように強制
-        if (mainHandItem.isEmpty()) {
-            mainHandItem = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        if (mainHandItem.isEmpty() || !mainHandItem.is(ModItems.TUNG_SAHUR_BAT.get())) {
+            mainHandItem = createBatForEntity(animatable);
             // エンティティにバットを装備させる
             animatable.setItemSlot(EquipmentSlot.MAINHAND, mainHandItem);
         }
 
-        switch (bone.getName()) {
-            case "itemMainHand":
-                return mainHandItem;
-            case "itemOffHand":
-                return offhandItem;
-            case "itemMainHand2":
-            case "itemMainHand3":
-                return mainHandItem;
-            case "itemOffHand2":
-            case "itemOffHand3":
-                return offhandItem;
-            case "Head":
-            case "armorHead":
-                return headItem;
-            default:
-                return null;
+        // 手に持つアイテムの判定
+        return switch (bone.getName()) {
+            case "right_hand", "rightArm", "right_arm", "arm_right", "armRight" -> {
+                // バットの表示を強制
+                if (!mainHandItem.isEmpty() && mainHandItem.is(ModItems.TUNG_SAHUR_BAT.get())) {
+                    enhanceBatForDisplay(mainHandItem, animatable);
+                    yield mainHandItem;
+                }
+                yield mainHandItem;
+            }
+            case "left_hand", "leftArm", "left_arm", "arm_left", "armLeft" -> {
+                // オフハンドアイテム
+                if (!offhandItem.isEmpty() && !(offhandItem.getItem() instanceof ShieldItem)) {
+                    yield offhandItem;
+                }
+                yield ItemStack.EMPTY;
+            }
+            case "head", "helmet" -> {
+                // ヘッドアイテム
+                yield headItem;
+            }
+            default -> ItemStack.EMPTY;
+        };
+    }
+
+    /**
+     * エンティティに応じたバットアイテムを作成
+     */
+    private ItemStack createBatForEntity(T animatable) {
+        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+
+        if (!batStack.hasTag()) {
+            batStack.getOrCreateTag();
+        }
+
+        int evolutionStage = animatable.getEvolutionStage();
+        batStack.getTag().putInt("TungSahurStage", evolutionStage);
+        batStack.getTag().putBoolean("TungSahurOwned", true);
+        batStack.getTag().putBoolean("ForceDisplay", true);
+        batStack.getTag().putBoolean("AlwaysVisible", true);
+
+        return batStack;
+    }
+
+    /**
+     * バットの表示を強化
+     */
+    private void enhanceBatForDisplay(ItemStack batStack, T animatable) {
+        if (batStack.hasTag()) {
+            CompoundTag tag = batStack.getTag();
+            tag.putBoolean("TungSahurOwned", true);
+            tag.putBoolean("ForceDisplay", true);
+            tag.putBoolean("AlwaysVisible", true);
+            tag.putBoolean("ForceRender", true);
+            tag.putInt("TungSahurStage", animatable.getEvolutionStage());
+
+            // 進化段階に応じた視覚的強化
+            switch (animatable.getEvolutionStage()) {
+                case 1 -> {
+                    tag.putBoolean("Bloodstained", true);
+                    tag.putInt("BloodLevel", 1);
+                }
+                case 2 -> {
+                    tag.putBoolean("Cursed", true);
+                    tag.putBoolean("DarkEnergy", true);
+                    tag.putInt("BloodLevel", 3);
+                }
+            }
         }
     }
 
     @Override
     protected ItemDisplayContext getTransformTypeForStack(GeoBone bone, ItemStack stack, T animatable) {
-        switch (bone.getName()) {
-            case "itemOffHand":
-            case "itemMainHand":
-                return ItemDisplayContext.THIRD_PERSON_RIGHT_HAND;
-            case "itemOffHand2":
-            case "itemOffHand3":
-            case "itemMainHand2":
-            case "itemMainHand3":
-                return ItemDisplayContext.THIRD_PERSON_RIGHT_HAND;
-            case "Head":
-            case "armorHead":
-                return ItemDisplayContext.HEAD;
-            default:
-                return ItemDisplayContext.NONE;
-        }
-    }
-
-    @Override
-    protected void renderStackForBone(PoseStack poseStack, GeoBone bone, ItemStack stack, T animatable, MultiBufferSource bufferSource, float partialTick, int packedLight, int packedOverlay) {
-        ItemStack mainHandItem = animatable.getMainHandItem();
-        ItemStack offhandItem = animatable.getOffhandItem();
-        ItemStack headItem = animatable.getItemBySlot(EquipmentSlot.HEAD);
-
-        // バットの進化段階に応じたスケールファクター
-        float scaleFactor = getScaleFactorForEvolution(animatable);
-
-        if (stack == mainHandItem || stack == offhandItem) {
-            poseStack.scale(scaleFactor, scaleFactor, scaleFactor);
-
-            // バット専用の回転設定
-            if (stack.is(ModItems.TUNG_SAHUR_BAT.get())) {
-                poseStack.mulPose(Axis.XP.rotationDegrees(-90.0F));
-                poseStack.mulPose(Axis.ZP.rotationDegrees(15.0F)); // 少し角度を付ける
-
-                // 進化段階に応じた位置調整
-                adjustBatPosition(poseStack, animatable);
-            } else {
-                poseStack.mulPose(Axis.XP.rotationDegrees(-90.0F));
-
-                if (stack.getItem() instanceof ShieldItem) {
-                    if (stack == offhandItem) {
-                        poseStack.translate(0.0F, -0.25F, 0.0F);
-                        poseStack.mulPose(Axis.ZP.rotationDegrees(180.0F));
-                    }
-                }
-            }
-        }
-        else if(stack == headItem){
-            scaleFactor = 0.625F;
-            poseStack.translate(0.0F, 0.25F, 0.0F);
-            poseStack.scale(scaleFactor, scaleFactor, scaleFactor);
-        }
-
-        super.renderStackForBone(poseStack, bone, stack, animatable, bufferSource, partialTick, packedLight, packedOverlay);
-    }
-
-    /**
-     * 進化段階に応じたスケールファクターを取得
-     */
-    private float getScaleFactorForEvolution(T animatable) {
-        int evolutionStage = animatable.getEvolutionStage();
-        return switch (evolutionStage) {
-            case 1 -> 1.2F; // 少し大きく
-            case 2 -> 1.5F; // さらに大きく
-            default -> 1.0F; // 通常サイズ
+        return switch (bone.getName()) {
+            case "right_hand", "rightArm", "right_arm", "arm_right", "armRight" -> ItemDisplayContext.THIRD_PERSON_RIGHT_HAND;
+            case "left_hand", "leftArm", "left_arm", "arm_left", "armLeft" -> ItemDisplayContext.THIRD_PERSON_LEFT_HAND;
+            case "head", "helmet" -> ItemDisplayContext.HEAD;
+            default -> ItemDisplayContext.NONE;
         };
     }
 
-    /**
-     * バットの位置を進化段階に応じて調整
-     */
-    private void adjustBatPosition(PoseStack poseStack, T animatable) {
-        int evolutionStage = animatable.getEvolutionStage();
+    @Override
+    protected void renderStackForBone(PoseStack poseStack, GeoBone bone, ItemStack stack, T animatable,
+                                      MultiBufferSource bufferSource, float partialTick, int packedLight, int packedOverlay) {
+        if (stack.isEmpty()) return;
 
-        switch (evolutionStage) {
-            case 1:
-                // Stage 2: 少し前に出す
-                poseStack.translate(0.0F, 0.1F, 0.2F);
-                break;
-            case 2:
-                // Stage 3: さらに前に出して威圧感を演出
-                poseStack.translate(0.0F, 0.2F, 0.4F);
-                break;
-            default:
-                // Stage 1: デフォルト位置
-                break;
+        // バットの特殊レンダリング処理
+        if (stack.is(ModItems.TUNG_SAHUR_BAT.get())) {
+            poseStack.pushPose();
+
+            // 進化段階に応じたエフェクト
+            int stage = animatable.getEvolutionStage();
+
+            // 基本的な位置調整
+            switch (bone.getName()) {
+                case "right_hand", "rightArm", "right_arm", "arm_right", "armRight" -> {
+                    poseStack.translate(0.0, -0.1, 0.0);
+                    poseStack.mulPose(Axis.XP.rotationDegrees(-90));
+                    poseStack.mulPose(Axis.YP.rotationDegrees(0));
+
+                    // 進化段階による特殊効果
+                    if (stage >= 1) {
+                        // 威圧感のある振動
+                        float shake = (float) Math.sin(animatable.tickCount * 0.1F) * 0.005F;
+                        poseStack.translate(shake, shake, 0);
+                    }
+
+                    if (stage >= 2) {
+                        // さらに強い振動とサイズ調整
+                        float pulse = 1.0F + (float) Math.sin(animatable.tickCount * 0.05F) * 0.03F;
+                        poseStack.scale(pulse, pulse, pulse);
+                    }
+                }
+            }
+
+            poseStack.popPose();
         }
+
+        super.renderStackForBone(poseStack, bone, stack, animatable, bufferSource, partialTick, packedLight, packedOverlay);
     }
 }

@@ -83,7 +83,7 @@ public class TungSahurMod {
 
     @SubscribeEvent
     public void registerAttributes(EntityAttributeCreationEvent event) {
-        event.put(ModEntities.TUNG_SAHUR.get(), TungSahurEntity.createAttributes());
+        event.put(ModEntities.TUNG_SAHUR.get(), TungSahurEntity.createAttributes().build());
     }
 
     @SubscribeEvent
@@ -91,7 +91,7 @@ public class TungSahurMod {
         event.register(ModEntities.TUNG_SAHUR.get(),
                 SpawnPlacements.Type.ON_GROUND,
                 Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                TungSahurEntity::canSpawn,
+                TungSahurEntity::checkTungSahurSpawnRules, // メソッド名を修正
                 SpawnPlacementRegisterEvent.Operation.REPLACE);
     }
 

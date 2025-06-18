@@ -1,4 +1,4 @@
-// TungSahurJumpAttackGoal.java - ジャンプ攻撃にパーティクル追加
+// TungSahurJumpAttackGoal.java - ジャンプ攻撃ゴール（2日目以降）
 package com.tungsahur.mod.entity.goals;
 
 import com.tungsahur.mod.entity.TungSahurEntity;
@@ -8,19 +8,22 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.phys.AABB;
 
 import java.util.EnumSet;
+import java.util.List;
 
 public class TungSahurJumpAttackGoal extends Goal {
     private final TungSahurEntity tungSahur;
     private LivingEntity target;
-    private int jumpCooldown = 0;
-    private int jumpChargeTime = 0;
-    private boolean isJumping = false;
+    private int prepareTime = 0;
+    private int landingTime = 0;
+    private boolean isPreparingJump = false;
+    private boolean hasLanded = false;
 
     public TungSahurJumpAttackGoal(TungSahurEntity tungSahur) {
         this.tungSahur = tungSahur;
-        this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP));
+        this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP, Flag.LOOK));
     }
 
     @Override
@@ -28,179 +31,222 @@ public class TungSahurJumpAttackGoal extends Goal {
         this.target = this.tungSahur.getTarget();
         if (this.target == null) return false;
 
+        // 2日目以降のみ使用可能
+        if (this.tungSahur.getEvolutionStage() < 1) return false;
+
         double distance = this.tungSahur.distanceTo(this.target);
-        return distance > 4.0D && distance < 12.0D && this.jumpCooldown <= 0 &&
-                this.tungSahur.onGround() && this.tungSahur.getEvolutionStage() >= 1;
+
+        // 中距離でのジャンプ攻撃
+        return distance >= 4.0D && distance <= 10.0D &&
+                this.tungSahur.canJump() &&
+                this.tungSahur.onGround() &&
+                this.tungSahur.hasLineOfSight(this.target);
+    }
+
+    @Override
+    public boolean canContinueToUse() {
+        if (this.target == null || !this.target.isAlive()) return false;
+        if (this.tungSahur.getEvolutionStage() < 1) return false;
+
+        // ジャンプ中または着地処理中は続行
+        return this.isPreparingJump || !this.tungSahur.onGround() || this.hasLanded;
     }
 
     @Override
     public void start() {
-        this.jumpChargeTime = 20;
-        this.isJumping = false;
-        spawnChargeStartParticles();
+        this.prepareTime = 15 + this.tungSahur.getRandom().nextInt(10); // 0.75-1.25秒の準備時間
+        this.landingTime = 0;
+        this.isPreparingJump = true;
+        this.hasLanded = false;
+
+        // 準備開始音
+        this.tungSahur.level().playSound(null, this.tungSahur.blockPosition(),
+                SoundEvents.RAVAGER_ROAR, SoundSource.HOSTILE, 0.6F, 1.4F);
+
+        // 準備パーティクル
+        spawnPrepareParticles();
+    }
+
+    @Override
+    public void stop() {
+        this.prepareTime = 0;
+        this.landingTime = 0;
+        this.isPreparingJump = false;
+        this.hasLanded = false;
+        this.tungSahur.getNavigation().stop();
     }
 
     @Override
     public void tick() {
         if (this.target == null) return;
 
-        if (this.jumpChargeTime > 0) {
-            this.jumpChargeTime--;
+        // ターゲットを見る
+        this.tungSahur.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
+
+        if (this.isPreparingJump) {
+            // ジャンプ準備中
             this.tungSahur.getNavigation().stop();
+            this.prepareTime--;
 
-            // チャージ中の震える演出 + パーティクル
-            if (this.jumpChargeTime % 4 == 0) {
-                this.tungSahur.setPos(
-                        this.tungSahur.getX() + (this.tungSahur.getRandom().nextFloat() - 0.5F) * 0.1F,
-                        this.tungSahur.getY(),
-                        this.tungSahur.getZ() + (this.tungSahur.getRandom().nextFloat() - 0.5F) * 0.1F
-                );
-                spawnChargeParticles();
+            // 準備中のパーティクル効果
+            if (this.prepareTime % 3 == 0) {
+                spawnPrepareParticles();
             }
-        } else if (!isJumping) {
-            performJumpAttack();
-            isJumping = true;
-        }
 
-        if (this.jumpCooldown > 0) {
-            this.jumpCooldown--;
+            // 準備完了時のジャンプ実行
+            if (this.prepareTime <= 0) {
+                executeJump();
+                this.isPreparingJump = false;
+            }
+        } else if (!this.tungSahur.onGround()) {
+            // ジャンプ中のパーティクル
+            spawnJumpTrailParticles();
+        } else if (!this.hasLanded) {
+            // 着地処理
+            handleLanding();
+            this.hasLanded = true;
+            this.landingTime = 20; // 着地後の処理時間
+        } else if (this.landingTime > 0) {
+            // 着地後の処理
+            this.landingTime--;
+            if (this.landingTime <= 0) {
+                // ゴール終了
+            }
         }
     }
 
-    private void spawnChargeStartParticles() {
-        if (tungSahur.level() instanceof ServerLevel serverLevel) {
-            // 足元に魔法陣風のパーティクル
-            for (int ring = 1; ring <= 3; ring++) {
-                for (int i = 0; i < 8 * ring; i++) {
-                    double angle = (i * 2 * Math.PI) / (8 * ring);
-                    double radius = ring * 0.8;
-                    double x = tungSahur.getX() + Math.cos(angle) * radius;
-                    double z = tungSahur.getZ() + Math.sin(angle) * radius;
+    private void executeJump() {
+        if (this.target != null && this.tungSahur.canJump()) {
+            // ジャンプ実行
+            this.tungSahur.performJumpAttack(this.target);
 
-                    serverLevel.sendParticles(ParticleTypes.ENCHANT,
-                            x, tungSahur.getY() + 0.1, z, 1, 0.0, 0.1, 0.0, 0.0);
+            // ジャンプ音
+            this.tungSahur.level().playSound(null, this.tungSahur.blockPosition(),
+                    SoundEvents.RAVAGER_ATTACK, SoundSource.HOSTILE, 0.8F, 1.0F);
+
+            // ジャンプ時のパーティクル
+            spawnJumpParticles();
+        }
+    }
+
+    private void handleLanding() {
+        // 着地音
+        this.tungSahur.level().playSound(null, this.tungSahur.blockPosition(),
+                SoundEvents.RAVAGER_STEP, SoundSource.HOSTILE, 1.0F, 0.8F);
+
+        // 着地パーティクル
+        spawnLandingParticles();
+
+        // 着地ダメージ判定
+        checkLandingDamage();
+    }
+
+    private void checkLandingDamage() {
+        // 着地地点周辺の敵にダメージ
+        double radius = 2.0D + (this.tungSahur.getEvolutionStage() * 0.5D);
+        AABB area = new AABB(
+                this.tungSahur.getX() - radius, this.tungSahur.getY() - 1.0, this.tungSahur.getZ() - radius,
+                this.tungSahur.getX() + radius, this.tungSahur.getY() + 2.0, this.tungSahur.getZ() + radius
+        );
+
+        List<LivingEntity> nearbyEntities = this.tungSahur.level().getEntitiesOfClass(LivingEntity.class, area);
+
+        for (LivingEntity entity : nearbyEntities) {
+            if (entity != this.tungSahur && !entity.isAlliedTo(this.tungSahur)) {
+                double distance = this.tungSahur.distanceTo(entity);
+                if (distance <= radius) {
+                    // ダメージ量（距離に応じて減衰）
+                    float damage = (float) (6.0D + (this.tungSahur.getEvolutionStage() * 2.0D));
+                    damage *= (1.0D - (distance / radius) * 0.5D); // 距離による減衰
+
+                    entity.hurt(this.tungSahur.damageSources().mobAttack(this.tungSahur), damage);
+
+                    // ノックバック効果
+                    double dx = entity.getX() - this.tungSahur.getX();
+                    double dz = entity.getZ() - this.tungSahur.getZ();
+                    double length = Math.sqrt(dx * dx + dz * dz);
+
+                    if (length > 0) {
+                        double knockbackStrength = 1.0D + (this.tungSahur.getEvolutionStage() * 0.3D);
+                        entity.setDeltaMovement(
+                                entity.getDeltaMovement().add(
+                                        (dx / length) * knockbackStrength,
+                                        0.3D,
+                                        (dz / length) * knockbackStrength
+                                )
+                        );
+                    }
                 }
             }
         }
     }
 
-    private void spawnChargeParticles() {
-        if (tungSahur.level() instanceof ServerLevel serverLevel) {
-            // 脚部周りのエネルギー蓄積
-            for (int i = 0; i < 6; i++) {
-                double angle = tungSahur.tickCount * 0.3 + i * Math.PI / 3;
-                double radius = 1.2;
-                double x = tungSahur.getX() + Math.cos(angle) * radius;
-                double z = tungSahur.getZ() + Math.sin(angle) * radius;
-                double y = tungSahur.getY() + 0.2;
+    private void spawnPrepareParticles() {
+        if (this.tungSahur.level() instanceof ServerLevel serverLevel) {
+            // 足元の震えるパーティクル
+            for (int i = 0; i < 4; i++) {
+                double x = this.tungSahur.getX() + (this.tungSahur.getRandom().nextDouble() - 0.5) * 2.0;
+                double y = this.tungSahur.getY() + 0.1;
+                double z = this.tungSahur.getZ() + (this.tungSahur.getRandom().nextDouble() - 0.5) * 2.0;
 
-                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                        x, y, z, 1, 0.0, 0.2, 0.0, 0.0);
-                serverLevel.sendParticles(ParticleTypes.TOTEM_OF_UNDYING,
-                        x, y, z, 1, 0.0, 0.1, 0.0, 0.0);
+                serverLevel.sendParticles(ParticleTypes.POOF,
+                        x, y, z, 1, 0.0, 0.0, 0.0, 0.1);
             }
 
-            // 地面のクラック風パーティクル
-            for (int i = 0; i < 10; i++) {
-                double offsetX = (serverLevel.random.nextDouble() - 0.5) * 3.0;
-                double offsetZ = (serverLevel.random.nextDouble() - 0.5) * 3.0;
-
-                serverLevel.sendParticles(ParticleTypes.SMOKE,
-                        tungSahur.getX() + offsetX, tungSahur.getY(), tungSahur.getZ() + offsetZ,
-                        1, 0.0, 0.0, 0.0, 0.0);
-            }
-
-            // 充電音
-            if (jumpChargeTime % 8 == 0) {
-                serverLevel.playSound(null, tungSahur.blockPosition(),
-                        SoundEvents.BEACON_POWER_SELECT, SoundSource.HOSTILE, 0.5F, 2.0F);
-            }
+            // エネルギーチャージパーティクル
+            serverLevel.sendParticles(ParticleTypes.FIREWORK,
+                    this.tungSahur.getX(), this.tungSahur.getY() + 0.5, this.tungSahur.getZ(),
+                    2, 0.2, 0.2, 0.2, 0.05);
         }
     }
 
-    private void performJumpAttack() {
-        double dx = this.target.getX() - this.tungSahur.getX();
-        double dy = this.target.getY() - this.tungSahur.getY();
-        double dz = this.target.getZ() - this.tungSahur.getZ();
-        double distance = Math.sqrt(dx * dx + dz * dz);
+    private void spawnJumpParticles() {
+        if (this.tungSahur.level() instanceof ServerLevel serverLevel) {
+            // ジャンプ時の爆発パーティクル
+            serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+                    this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
+                    3, 0.5, 0.1, 0.5, 0.0);
 
-        // ジャンプの勢いを計算
-        double jumpPower = 0.8D + this.tungSahur.getEvolutionStage() * 0.2D;
-
-        this.tungSahur.setDeltaMovement(
-                (dx / distance) * jumpPower,
-                0.6D + (dy > 0 ? dy * 0.1D : 0),
-                (dz / distance) * jumpPower
-        );
-
-        if (tungSahur.level() instanceof ServerLevel serverLevel) {
-            // ジャンプ開始の爆発的パーティクル
-            spawnJumpLaunchParticles(serverLevel);
-
-            // ジャンプ音強化
-            serverLevel.playSound(null, this.tungSahur.blockPosition(),
-                    SoundEvents.RAVAGER_ROAR, SoundSource.HOSTILE, 1.0F, 1.2F);
-            serverLevel.playSound(null, this.tungSahur.blockPosition(),
-                    SoundEvents.GENERIC_EXPLODE, SoundSource.HOSTILE, 0.8F, 1.5F);
+            // 煙パーティクル
+            serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE,
+                    this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
+                    6, 0.8, 0.2, 0.8, 0.1);
         }
-
-        this.jumpCooldown = 100;
-        this.stop();
     }
 
-    private void spawnJumpLaunchParticles(ServerLevel serverLevel) {
-        // 足元の爆発
-        serverLevel.sendParticles(ParticleTypes.EXPLOSION,
-                tungSahur.getX(), tungSahur.getY(), tungSahur.getZ(),
-                5, 0.5, 0.2, 0.5, 0.0);
-
-        // 放射状の衝撃波
-        for (int i = 0; i < 24; i++) {
-            double angle = i * Math.PI / 12;
-            double velocityX = Math.cos(angle) * 1.2;
-            double velocityZ = Math.sin(angle) * 1.2;
-
-            serverLevel.sendParticles(ParticleTypes.FLAME,
-                    tungSahur.getX(), tungSahur.getY() + 0.1, tungSahur.getZ(),
-                    1, velocityX, 0.2, velocityZ, 0.1);
-            serverLevel.sendParticles(ParticleTypes.CAMPFIRE_COSY_SMOKE,
-                    tungSahur.getX(), tungSahur.getY() + 0.1, tungSahur.getZ(),
-                    1, velocityX * 0.5, 0.4, velocityZ * 0.5, 0.0);
+    private void spawnJumpTrailParticles() {
+        if (this.tungSahur.level() instanceof ServerLevel serverLevel) {
+            // ジャンプ中の軌跡パーティクル
+            serverLevel.sendParticles(ParticleTypes.CLOUD,
+                    this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
+                    2, 0.3, 0.3, 0.3, 0.02);
         }
+    }
 
-        // 地面のクレーター風パーティクル
-        for (int ring = 1; ring <= 4; ring++) {
-            for (int i = 0; i < 6 * ring; i++) {
-                double angle = (i * 2 * Math.PI) / (6 * ring);
-                double radius = ring * 0.8;
-                double x = tungSahur.getX() + Math.cos(angle) * radius;
-                double z = tungSahur.getZ() + Math.sin(angle) * radius;
+    private void spawnLandingParticles() {
+        if (this.tungSahur.level() instanceof ServerLevel serverLevel) {
+            // 着地時の衝撃波パーティクル
+            for (int i = 0; i < 12; i++) {
+                double angle = (i / 12.0) * Math.PI * 2;
+                double radius = 2.0D + (this.tungSahur.getEvolutionStage() * 0.5D);
 
-                serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE,
-                        x, tungSahur.getY() + 0.1, z, 1, 0.0, 0.3, 0.0, 0.05);
+                double x = this.tungSahur.getX() + Math.cos(angle) * radius;
+                double y = this.tungSahur.getY() + 0.1;
+                double z = this.tungSahur.getZ() + Math.sin(angle) * radius;
+
+                serverLevel.sendParticles(ParticleTypes.POOF,
+                        x, y, z, 1, 0.0, 0.1, 0.0, 0.1);
             }
-        }
 
-        // 上昇する軌跡パーティクル
-        for (int i = 0; i < 15; i++) {
-            double offsetX = (serverLevel.random.nextDouble() - 0.5) * 0.6;
-            double offsetZ = (serverLevel.random.nextDouble() - 0.5) * 0.6;
-
-            serverLevel.sendParticles(ParticleTypes.DRIPPING_LAVA,
-                    tungSahur.getX() + offsetX, tungSahur.getY() + 1.0, tungSahur.getZ() + offsetZ,
-                    1, 0.0, 0.8, 0.0, 0.0);
+            // 中央の爆発パーティクル
+            serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+                    this.tungSahur.getX(), this.tungSahur.getY() + 0.5, this.tungSahur.getZ(),
+                    2, 0.0, 0.0, 0.0, 0.0);
         }
     }
 
     @Override
-    public boolean canContinueToUse() {
-        return this.target != null && this.target.isAlive() && this.jumpChargeTime > 0;
-    }
-
-    @Override
-    public void stop() {
-        this.target = null;
-        this.jumpChargeTime = 0;
-        this.isJumping = false;
+    public boolean requiresUpdateEveryTick() {
+        return true;
     }
 }
