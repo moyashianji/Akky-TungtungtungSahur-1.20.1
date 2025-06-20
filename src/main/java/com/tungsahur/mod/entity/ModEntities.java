@@ -62,6 +62,7 @@ public class ModEntities {
                 Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
                 TungSahurEntity::checkTungSahurSpawnRules);
 
+
         TungSahurMod.LOGGER.info("TungSahurスポーン設定登録完了");
     }
 

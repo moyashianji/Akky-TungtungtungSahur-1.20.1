@@ -31,16 +31,17 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
 
         double distance = tungSahur.distanceTo(target);
 
-        // 日数に応じた攻撃距離の調整
+        // 日数に応じた攻撃距離の大幅拡張
         double maxAttackDistance = switch (tungSahur.getDayNumber()) {
-            case 1 -> 2.5D;
-            case 2 -> 3.0D;
-            case 3 -> 3.5D;
-            default -> 2.5D;
+            case 1 -> 4.5D; // 1日目: 4.5ブロック
+            case 2 -> 5.0D; // 2日目: 5ブロック
+            case 3 -> 5.5D; // 3日目: 5.5ブロック
+            default -> 4.5D;
         };
 
         return distance <= maxAttackDistance;
     }
+
 
     @Override
     public boolean canContinueToUse() {
@@ -51,9 +52,8 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
         if (target == null) return false;
 
         double distance = tungSahur.distanceTo(target);
-        return distance <= 4.0D; // 継続可能距離は少し広めに
+        return distance <= 6.0D; // 継続可能距離も拡張
     }
-
     @Override
     protected void checkAndPerformAttack(LivingEntity target, double distToTargetSqr) {
         double d0 = this.getAttackReachSqr(target);
@@ -219,10 +219,10 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
 
     @Override
     protected double getAttackReachSqr(LivingEntity attackTarget) {
-        // 日数とスケールに応じた攻撃範囲
-        double baseReach = tungSahur.getBbWidth() * 2.0D + attackTarget.getBbWidth();
-        double dayBonus = tungSahur.getDayNumber() * 0.3D;
-        double scaleBonus = (tungSahur.getScaleFactor() - 1.0D) * 0.5D;
+        // 基本攻撃範囲を大幅拡張
+        double baseReach = tungSahur.getBbWidth() * 3.5D + attackTarget.getBbWidth(); // 2.0Dから3.5Dに拡張
+        double dayBonus = tungSahur.getDayNumber() * 0.5D; // 0.3Dから0.5Dに拡張
+        double scaleBonus = (tungSahur.getScaleFactor() - 1.0D) * 0.8D; // 0.5Dから0.8Dに拡張
 
         return (baseReach + dayBonus + scaleBonus) * (baseReach + dayBonus + scaleBonus);
     }

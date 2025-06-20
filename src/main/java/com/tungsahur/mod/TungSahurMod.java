@@ -9,7 +9,11 @@ import com.tungsahur.mod.events.DayCounterEvents;
 import com.tungsahur.mod.items.ModItems;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.world.Difficulty;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.SpawnPlacements;
+import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.ItemStack;
@@ -73,7 +77,11 @@ public class TungSahurMod {
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("Tung Tung Tung Sahur Mod - 恐怖の始まり...");
+
+
+
     }
+
 
     private void addCreative(BuildCreativeModeTabContentsEvent event) {
         if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
@@ -88,13 +96,41 @@ public class TungSahurMod {
 
     @SubscribeEvent
     public void registerSpawnPlacements(SpawnPlacementRegisterEvent event) {
+        // 1つの設定で手動スポーンと自然スポーンの両方を処理
         event.register(ModEntities.TUNG_SAHUR.get(),
                 SpawnPlacements.Type.ON_GROUND,
                 Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                TungSahurEntity::checkTungSahurSpawnRules, // メソッド名を修正
-                SpawnPlacementRegisterEvent.Operation.REPLACE);
-    }
+                (entityType, world, reason, pos, random) -> {
+                    // 手動スポーン（コマンドやスポーンエッグ）の場合
+                    if (reason == MobSpawnType.COMMAND || reason == MobSpawnType.SPAWN_EGG) {
+                        // 既存の条件を使用
+                        return TungSahurEntity.checkTungSahurSpawnRules(entityType, world, reason, pos, random);
+                    }
 
+                    // 自然スポーンの場合
+                    if (reason == MobSpawnType.NATURAL) {
+                        // 平和モード以外でのみスポーン
+                        if (world.getDifficulty() == Difficulty.PEACEFUL) return false;
+
+                        // 夜間のみスポーン
+                        if (world.getLevel().isDay()) return false;
+
+                        // 暗い場所でのみスポーン（ゾンビと同じ条件）
+                        boolean darkEnough = Monster.isDarkEnoughToSpawn(world, pos, random);
+
+                        // 基本的なモブスポーン条件
+                        boolean basicRules = Mob.checkMobSpawnRules(entityType, world, reason, pos, random);
+
+                        return darkEnough && basicRules;
+                    }
+
+                    // その他のスポーン理由の場合は既存の条件
+                    return TungSahurEntity.checkTungSahurSpawnRules(entityType, world, reason, pos, random);
+                },
+                SpawnPlacementRegisterEvent.Operation.REPLACE); // REPLACEのみ使用
+
+        TungSahurMod.LOGGER.info("TungSahur統合スポーン設定登録完了");
+    }
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         TungSahurCommands.register(event.getDispatcher());

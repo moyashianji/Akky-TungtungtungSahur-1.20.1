@@ -18,6 +18,7 @@ import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.Difficulty;
 import net.minecraft.world.DifficultyInstance;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
@@ -35,6 +36,7 @@ import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import software.bernie.geckolib.animatable.GeoEntity;
 import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
@@ -61,8 +63,8 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     // アニメーション定数 - 日数に応じて変わる
     private static final RawAnimation DEATH_ANIM = RawAnimation.begin().then("death", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation IDLE_DAY1_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
-    private static final RawAnimation IDLE_DAY2_ANIM = RawAnimation.begin().then("idle2", Animation.LoopType.LOOP);
-    private static final RawAnimation IDLE_DAY3_ANIM = RawAnimation.begin().then("idle3", Animation.LoopType.LOOP);
+    private static final RawAnimation IDLE_DAY2_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
+    private static final RawAnimation IDLE_DAY3_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
     private static final RawAnimation WALK_ANIM = RawAnimation.begin().then("walk", Animation.LoopType.LOOP);
     private static final RawAnimation SPRINT_ANIM = RawAnimation.begin().then("sprint", Animation.LoopType.LOOP);
     private static final RawAnimation CLIMBING_ANIM = RawAnimation.begin().then("climbing", Animation.LoopType.LOOP);
@@ -84,6 +86,8 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         super(entityType, level);
         this.xpReward = 15;
         this.setCanPickUpLoot(false);
+        this.setMaxUpStep(2.0F); // 1.5ブロックの段差まで登れる
+
     }
 
     // 初期化
@@ -104,8 +108,8 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     protected void registerGoals() {
         // 基本AI（優先度の高い順）
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new TungSahurMeleeAttackGoal(this, 1.0D, false));
-        this.goalSelector.addGoal(2, new TungSahurThrowGoal(this));
+        this.goalSelector.addGoal(1, new TungSahurThrowGoal(this)); // 投擲を最優先に
+        this.goalSelector.addGoal(2, new TungSahurMeleeAttackGoal(this, 1.0D, false)); // 近接攻撃を2番目に
         this.goalSelector.addGoal(3, new TungSahurJumpAttackGoal(this));
         this.goalSelector.addGoal(4, new TungSahurWallClimbGoal(this));
         this.goalSelector.addGoal(5, new TungSahurAdvancedMoveToTargetGoal(this, 1.0D));
@@ -114,10 +118,27 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
         // ターゲット設定
-        this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
+
         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
     }
+    @Override
+    public boolean canBeSeenAsEnemy() {
+        return false; // 他MOBから敵として認識されない
+    }
+    @Override
+    public MobType getMobType() {
+        return MobType.UNDEFINED; // 他MOBから中立的に扱われる
+    }
+    @Override
+    public boolean canAttack(LivingEntity target) {
+        // プレイヤーのみ攻撃可能
+        return target instanceof Player;
+    }
 
+    @Override
+    public boolean isPreventingPlayerRest(Player player) {
+        return true; // プレイヤーの睡眠は妨害する（既存機能維持）
+    }
     public static AttributeSupplier.Builder createAttributes() {
         return Monster.createMonsterAttributes()
                 .add(Attributes.MAX_HEALTH, 40.0D)
@@ -126,6 +147,30 @@ public class TungSahurEntity extends Monster implements GeoEntity {
                 .add(Attributes.FOLLOW_RANGE, 32.0D)
                 .add(Attributes.ARMOR, 2.0D)
                 .add(Attributes.KNOCKBACK_RESISTANCE, 0.3D);
+    }
+    // TungSahurEntity.java に以下のメソッドを追加
+    public static void init() {
+        SpawnPlacements.register(ModEntities.TUNG_SAHUR.get(),
+                SpawnPlacements.Type.ON_GROUND,
+                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                (entityType, world, reason, pos, random) -> {
+                    // 平和モード以外でのみスポーン
+                    if (world.getDifficulty() == Difficulty.PEACEFUL) return false;
+
+                    // 夜間のみスポーン
+                    if (world.getLevel().isDay()) return false;
+
+                    // 暗い場所でのみスポーン（ゾンビと同じ条件）
+                    boolean darkEnough = Monster.isDarkEnoughToSpawn(world, pos, random);
+
+                    // 基本的なモブスポーン条件
+                    boolean basicRules = Mob.checkMobSpawnRules(entityType, world, reason, pos, random);
+
+                    return darkEnough && basicRules;
+                });
+
+        // ログで確認
+        TungSahurMod.LOGGER.info("TungSahur自然スポーン設定完了（MCreatorスタイル）");
     }
 
     @Override
@@ -346,8 +391,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         projectile.shoot(direction.x, direction.y + 0.1D, direction.z, (float) speed, 1.0F);
 
         this.level().addFreshEntity(projectile);
-        setThrowCooldown(60 + this.random.nextInt(40)); // 3-5秒のクールダウン
-        setCurrentlyThrowing(true);
+        setThrowCooldown(40 + this.random.nextInt(20)); // 2-3秒のクールダウン        setCurrentlyThrowing(true);
 
         // サウンド
         this.level().playSound(null, this.getX(), this.getY(), this.getZ(),

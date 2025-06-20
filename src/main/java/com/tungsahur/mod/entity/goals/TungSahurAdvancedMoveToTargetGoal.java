@@ -49,12 +49,13 @@ public class TungSahurAdvancedMoveToTargetGoal extends Goal {
 
         double distance = this.tungSahur.distanceTo(this.target);
 
-        // 極近距離では移動ゴールを無効化（攻撃ゴールを優先）
-        if (distance <= 2.0D) return false;
+        // 極近距離の判定を緩和（攻撃距離と合わせる）
+        if (distance <= 1.5D) return false; // 2.0Dから1.5Dに変更
 
         // 最大追跡距離内かチェック
         return distance <= 64.0D;
     }
+
 
     @Override
     public boolean canContinueToUse() {
@@ -164,8 +165,8 @@ public class TungSahurAdvancedMoveToTargetGoal extends Goal {
         PathNavigation navigation = this.tungSahur.getNavigation();
         double distance = this.tungSahur.distanceTo(this.target);
 
-        // 距離に応じた移動戦略
-        if (distance > 3.0D) {
+        // 距離に応じた移動戦略を調整
+        if (distance > 2.0D) { // 3.0Dから2.0Dに変更（より近くまで接近）
             // 直接移動
             this.path = navigation.createPath(this.target, 1);
 

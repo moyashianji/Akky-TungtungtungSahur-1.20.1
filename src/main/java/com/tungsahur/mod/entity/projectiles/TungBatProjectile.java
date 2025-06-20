@@ -440,28 +440,35 @@ public class TungBatProjectile extends ThrowableItemProjectile {
                 8, 0.5, 0.5, 0.5, 0.1);
     }
 
+
     private void spawnDestructionEffects(ServerLevel serverLevel, Vec3 impactPos) {
-        // 大規模爆発パーティクル
-        serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+        // 大規模爆発パーティクル（TNT風に強化）
+        serverLevel.sendParticles(ParticleTypes.EXPLOSION_EMITTER,
                 impactPos.x, impactPos.y, impactPos.z,
-                1, 0.0, 0.0, 0.0, 0.0);
+                1, 0.0D, 0.0D, 0.0D, 0.0D);
 
-        // 煙雲
-        serverLevel.sendParticles(ParticleTypes.CLOUD,
-                impactPos.x, impactPos.y, impactPos.z,
-                15 + getThrowerDayNumber() * 5, 1.5, 1.0, 1.5, 0.2);
-
-        // 土煙
-        serverLevel.sendParticles(ParticleTypes.POOF,
-                impactPos.x, impactPos.y, impactPos.z,
-                20 + getThrowerDayNumber() * 10, 2.0, 1.0, 2.0, 0.3);
-
-        // 3日目は魂の炎
-        if (getThrowerDayNumber() >= 3) {
-            serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                    impactPos.x, impactPos.y, impactPos.z,
-                    10, 1.0, 1.0, 1.0, 0.1);
+        // 追加の爆発パーティクル
+        for (int i = 0; i < 5; i++) {
+            serverLevel.sendParticles(ParticleTypes.EXPLOSION,
+                    impactPos.x + (Math.random() - 0.5) * 2,
+                    impactPos.y + (Math.random() - 0.5) * 2,
+                    impactPos.z + (Math.random() - 0.5) * 2,
+                    1, 0.0D, 0.0D, 0.0D, 0.0D);
         }
+
+        // 炎と煙のパーティクル
+        serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE,
+                impactPos.x, impactPos.y + 1, impactPos.z,
+                20, 1.5, 1.5, 1.5, 0.1);
+
+        serverLevel.sendParticles(ParticleTypes.FLAME,
+                impactPos.x, impactPos.y, impactPos.z,
+                15, 1.0, 1.0, 1.0, 0.05);
+
+        // 土や石の破片パーティクル
+        serverLevel.sendParticles(ParticleTypes.CAMPFIRE_COSY_SMOKE,
+                impactPos.x, impactPos.y + 2, impactPos.z,
+                10, 2.0, 2.0, 2.0, 0.02);
     }
 
     private void onImpact(Vec3 impactPos) {

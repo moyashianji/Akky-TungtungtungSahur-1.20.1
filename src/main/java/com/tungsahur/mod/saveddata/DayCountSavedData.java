@@ -46,6 +46,10 @@ public class DayCountSavedData extends SavedData {
     public void updateDayCount(ServerLevel level) {
         long currentTime = level.getDayTime();
         long currentDay = currentTime / 24000L; // Minecraftの1日は24000tick
+        long timeOfDay = currentTime % 24000L; // 1日の中の時間
+
+        // 夜の開始時間（13000tick = 午後7時頃）に日数を進行
+        boolean isNightTime = timeOfDay >= 13000L;
 
         if (!this.isInitialized) {
             // 初回初期化
@@ -58,17 +62,17 @@ public class DayCountSavedData extends SavedData {
             return;
         }
 
-        if (currentDay > this.lastDayTime) {
-            // 日が変わった
+        // 夜になったタイミングで日数進行をチェック
+        if (isNightTime && currentDay > this.lastDayTime) {
+            // 夜が来て、かつ新しい日になった場合のみ進行
             int daysPassed = (int) (currentDay - this.lastDayTime);
             this.dayCount = Math.min(3, this.dayCount + daysPassed); // 最大3日目まで
             this.lastDayTime = currentDay;
             this.setDirty();
 
-            TungSahurMod.LOGGER.info("日数更新: 現在{}日目 (経過日数: {})", this.dayCount, daysPassed);
+            TungSahurMod.LOGGER.info("夜の到来により日数更新: 現在{}日目 (経過日数: {})", this.dayCount, daysPassed);
         }
     }
-
     public void forceDayCount(int day) {
         this.dayCount = Math.max(1, Math.min(3, day));
         this.setDirty();
@@ -91,10 +95,10 @@ public class DayCountSavedData extends SavedData {
 
     public String getDayDescription() {
         return switch (this.getDayCount()) {
-            case 1 -> "1日目 - 基本形態";
-            case 2 -> "2日目 - 強化形態";
-            case 3 -> "3日目 - 最終形態";
-            default -> "不明";
+            case 1 -> "一日目の夜 - 静寂の始まり";
+            case 2 -> "二日目の夜 - 恐怖の高まり";
+            case 3 -> "三日目の夜 - 最終的な脅威";
+            default -> "未知の夜";
         };
     }
 }

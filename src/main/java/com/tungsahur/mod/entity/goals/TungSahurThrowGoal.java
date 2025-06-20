@@ -24,7 +24,7 @@ public class TungSahurThrowGoal extends Goal {
 
     public TungSahurThrowGoal(TungSahurEntity tungSahur) {
         this.tungSahur = tungSahur;
-        this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
+        this.setFlags(EnumSet.of(Flag.LOOK)); // Flag.MOVEを除去
     }
 
     @Override
@@ -41,18 +41,8 @@ public class TungSahurThrowGoal extends Goal {
         // 個別クールダウンチェック
         if (cooldownAfterThrow > 0) return false;
 
-        double distance = this.tungSahur.distanceTo(this.target);
-
-        // 中距離から遠距離での使用（近接攻撃より優先度が低い）
-        boolean inRange = distance >= 5.0D && distance <= 20.0D;
-        boolean hasLineOfSight = this.tungSahur.hasLineOfSight(this.target);
-
-        // 見られている時は投擲攻撃の使用頻度を下げる
-        if (this.tungSahur.isBeingWatched()) {
-            return inRange && hasLineOfSight && this.tungSahur.getRandom().nextFloat() < 0.3F;
-        }
-
-        return inRange && hasLineOfSight;
+        // ほぼ全ての条件を撤廃
+        return true;
     }
 
     @Override

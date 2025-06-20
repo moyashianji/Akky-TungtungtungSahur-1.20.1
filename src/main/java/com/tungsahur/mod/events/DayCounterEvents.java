@@ -9,6 +9,7 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Player;
@@ -176,38 +177,50 @@ public class DayCounterEvents {
         ChatFormatting color = switch (dayNumber) {
             case 1 -> ChatFormatting.YELLOW;
             case 2 -> ChatFormatting.GOLD;
-            case 3 -> ChatFormatting.RED;
+            case 3 -> ChatFormatting.DARK_RED;
             default -> ChatFormatting.WHITE;
         };
 
-        String dayDescription = switch (dayNumber) {
-            case 1 -> "静寂の始まり";
-            case 2 -> "恐怖の高まり";
-            case 3 -> "最終的な脅威";
-            default -> "未知の日";
+        String nightMessage = switch (dayNumber) {
+            case 1 -> "一日目の夜がやってきた...";
+            case 2 -> "二日目の夜がやってきた...";
+            case 3 -> "三日目の夜がやってきた...";
+            default -> dayNumber + "日目の夜がやってきた...";
         };
 
-        return Component.literal("§l=== " + dayNumber + "日目: " + dayDescription + " ===").withStyle(color);
+        return Component.literal("§l=== " + nightMessage + " ===").withStyle(color);
     }
 
     /**
      * プレイヤーへの日数通知送信
      */
     private static void sendDayNotificationToPlayer(ServerPlayer player, Component message, int dayNumber) {
-        // チャットメッセージ
+        // メインメッセージ
         player.sendSystemMessage(message);
 
-        // 追加情報
-        Component infoMessage = Component.literal("TungSahurが進化しています...").withStyle(ChatFormatting.DARK_RED, ChatFormatting.ITALIC);
-        player.sendSystemMessage(infoMessage);
+        // 追加の恐怖メッセージ
+        Component fearMessage = switch (dayNumber) {
+            case 1 -> Component.literal("何かが動き始めている...").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC);
+            case 2 -> Component.literal("Tung Sahurの力が強くなっている...").withStyle(ChatFormatting.GOLD, ChatFormatting.ITALIC);
+            case 3 -> Component.literal("最終的な恐怖が解き放たれた...").withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD);
+            default -> Component.literal("暗闇が深まっている...").withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC);
+        };
 
-        // サウンド効果
+        player.sendSystemMessage(fearMessage);
+
+        // 警告メッセージ
+        Component warningMessage = Component.literal("夜は危険です。十分に注意してください。").withStyle(ChatFormatting.RED);
+        player.sendSystemMessage(warningMessage);
+
+
+
+
 
 
         // パーティクル効果
         spawnNotificationParticles(player, dayNumber);
 
-        TungSahurMod.LOGGER.debug("プレイヤー {} に{}日目通知を送信", player.getName().getString(), dayNumber);
+        TungSahurMod.LOGGER.info("プレイヤー {} に{}日目の夜通知を送信", player.getName().getString(), dayNumber);
     }
 
 

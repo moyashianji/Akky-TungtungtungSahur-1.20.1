@@ -33,8 +33,7 @@ public class TungSahurJumpAttackGoal extends Goal {
 
     public TungSahurJumpAttackGoal(TungSahurEntity tungSahur) {
         this.tungSahur = tungSahur;
-        this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK, Flag.JUMP));
-    }
+        this.setFlags(EnumSet.of(Flag.LOOK, Flag.JUMP));    }
 
     @Override
     public boolean canUse() {
@@ -48,25 +47,27 @@ public class TungSahurJumpAttackGoal extends Goal {
         if (!this.tungSahur.canJumpAttack()) return false;
         if (this.cooldownAfterJump > 0) return false;
 
-        // 見られている時は使用しない
-        if (this.tungSahur.isBeingWatched()) return false;
+        // 見られている時でも低確率で使用可能に変更
+        if (this.tungSahur.isBeingWatched()) {
+            // 見られている時は30%の確率
+            if (this.tungSahur.getRandom().nextFloat() >= 0.3F) return false;
+        }
 
         double distance = this.tungSahur.distanceTo(this.target);
 
-        // 中距離での使用（近すぎても遠すぎても使わない）
-        boolean inRange = distance >= 4.0D && distance <= 12.0D;
+        // 距離条件を緩和（2-16ブロック）
+        boolean inRange = distance >= 2.0D && distance <= 16.0D;
         boolean hasLineOfSight = this.tungSahur.hasLineOfSight(this.target);
 
         // 高低差がある場合により積極的に使用
         double heightDiff = Math.abs(this.target.getY() - this.tungSahur.getY());
         boolean heightAdvantage = heightDiff >= 2.0D;
 
-        // 使用頻度制御（強力な攻撃なので頻繁には使わない）
-        boolean randomCheck = this.tungSahur.getRandom().nextFloat() < (heightAdvantage ? 0.4F : 0.2F);
+        // 使用頻度を大幅に向上（80% / 60%）
+        boolean randomCheck = this.tungSahur.getRandom().nextFloat() < (heightAdvantage ? 0.8F : 0.6F);
 
         return inRange && hasLineOfSight && randomCheck;
     }
-
     @Override
     public boolean canContinueToUse() {
         if (this.target == null || !this.target.isAlive()) return false;
