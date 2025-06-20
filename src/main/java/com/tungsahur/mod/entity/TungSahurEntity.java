@@ -1,4 +1,4 @@
-// TungSahurEntity.java - 完全実装版
+// TungSahurEntity.java - 完璧動作版（全攻撃対応）
 package com.tungsahur.mod.entity;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -37,6 +37,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import software.bernie.geckolib.animatable.GeoEntity;
 import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
@@ -46,7 +47,7 @@ import software.bernie.geckolib.core.object.PlayState;
 import software.bernie.geckolib.util.GeckoLibUtil;
 
 import javax.annotation.Nullable;
-import java.util.EnumSet;
+import java.util.List;
 
 public class TungSahurEntity extends Monster implements GeoEntity {
 
@@ -60,7 +61,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private static final EntityDataAccessor<Boolean> IS_CURRENTLY_JUMPING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> IS_SPRINTING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
 
-    // アニメーション定数 - 日数に応じて変わる
+    // アニメーション定数
     private static final RawAnimation DEATH_ANIM = RawAnimation.begin().then("death", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation IDLE_DAY1_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
     private static final RawAnimation IDLE_DAY2_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
@@ -72,12 +73,31 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private static final RawAnimation THROW_ANIM = RawAnimation.begin().then("throw", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation JUMP_ATTACK_ANIM = RawAnimation.begin().then("jump_attack", Animation.LoopType.PLAY_ONCE);
 
-    // 内部状態管理
+    // 完全なAI状態管理
     private int attackCooldown = 0;
-    private int throwCooldown = 0;
-    private int jumpCooldown = 0;
+    private int throwTimer = 0;
+    private int jumpTimer = 0;
     private int watchCheckCooldown = 0;
     private Player lastWatchingPlayer = null;
+
+    // ジャンプ攻撃の状態管理
+    private boolean isExecutingJump = false;
+    private boolean wasInAir = false;
+    private int jumpPhase = 0; // 0=準備, 1=ジャンプ中, 2=着地処理
+
+    // 投擲攻撃の状態管理
+    private boolean isExecutingThrow = false;
+    private int throwPhase = 0; // 0=チャージ, 1=エイム, 2=投擲
+    private int throwChargeTime = 0;
+
+    // AI行動間隔
+    private static final int THROW_INTERVAL_MIN = 80;  // 4秒
+    private static final int THROW_INTERVAL_MAX = 160; // 8秒
+    private static final int JUMP_INTERVAL_MIN = 200;  // 10秒
+    private static final int JUMP_INTERVAL_MAX = 300;  // 15秒
+
+    private int nextThrowTime = 0;
+    private int nextJumpTime = 0;
 
     // GeckoLib
     private final AnimatableInstanceCache cache = GeckoLibUtil.createInstanceCache(this);
@@ -86,15 +106,17 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         super(entityType, level);
         this.xpReward = 15;
         this.setCanPickUpLoot(false);
-        this.setMaxUpStep(2.0F); // 1.5ブロックの段差まで登れる
+        this.setMaxUpStep(2.0F);
 
+        // AI タイマー初期化
+        resetThrowTimer();
+        resetJumpTimer();
     }
 
-    // 初期化
     @Override
     protected void defineSynchedData() {
         super.defineSynchedData();
-        this.entityData.define(DAY_NUMBER, 1); // デフォルトは1日目
+        this.entityData.define(DAY_NUMBER, 1);
         this.entityData.define(SCALE_FACTOR, 1.0F);
         this.entityData.define(IS_WALL_CLIMBING, false);
         this.entityData.define(IS_BEING_WATCHED, false);
@@ -106,122 +128,528 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     @Override
     protected void registerGoals() {
-        // 基本AI（優先度の高い順）
+        // === 機能するGoal設定 ===
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new TungSahurThrowGoal(this)); // 投擲を最優先に
-        this.goalSelector.addGoal(2, new TungSahurMeleeAttackGoal(this, 1.0D, false)); // 近接攻撃を2番目に
-        this.goalSelector.addGoal(3, new TungSahurJumpAttackGoal(this));
-        this.goalSelector.addGoal(4, new TungSahurWallClimbGoal(this));
-        this.goalSelector.addGoal(5, new TungSahurAdvancedMoveToTargetGoal(this, 1.0D));
+
+        // 近接攻撃を最優先（確実に動作させる）
+        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, false) {
+            @Override
+            public boolean canUse() {
+                if (!super.canUse()) return false;
+
+                LivingEntity target = TungSahurEntity.this.getTarget();
+                if (target == null) return false;
+
+                double distance = TungSahurEntity.this.distanceTo(target);
+                double maxAttackDistance = switch (TungSahurEntity.this.getDayNumber()) {
+                    case 1 -> 3.5D;
+                    case 2 -> 4.0D;
+                    case 3 -> 4.5D;
+                    default -> 3.5D;
+                };
+
+                return distance <= maxAttackDistance && TungSahurEntity.this.canAttack();
+            }
+
+            @Override
+            protected void checkAndPerformAttack(LivingEntity target, double distToTargetSqr) {
+                double attackReachSqr = this.getAttackReachSqr(target);
+                if (distToTargetSqr <= attackReachSqr && this.isTimeToAttack()) {
+                    this.resetAttackCooldown();
+                    TungSahurEntity.this.performMeleeAttack(target);
+                }
+            }
+        });
+
+        // 移動Goal
+        this.goalSelector.addGoal(2, new TungSahurAdvancedMoveToTargetGoal(this, 1.0D));
+
+        // その他の基本Goal
         this.goalSelector.addGoal(6, new RandomStrollGoal(this, 0.6D));
         this.goalSelector.addGoal(7, new LookAtPlayerGoal(this, Player.class, 16.0F));
         this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
         // ターゲット設定
-
+        this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
     }
+
     @Override
     public boolean canBeSeenAsEnemy() {
-        return false; // 他MOBから敵として認識されない
+        return false;
     }
+
     @Override
     public MobType getMobType() {
-        return MobType.UNDEFINED; // 他MOBから中立的に扱われる
+        return MobType.UNDEFINED;
     }
+
     @Override
     public boolean canAttack(LivingEntity target) {
-        // プレイヤーのみ攻撃可能
         return target instanceof Player;
     }
 
     @Override
     public boolean isPreventingPlayerRest(Player player) {
-        return true; // プレイヤーの睡眠は妨害する（既存機能維持）
+        return true;
     }
+
     public static AttributeSupplier.Builder createAttributes() {
         return Monster.createMonsterAttributes()
-                .add(Attributes.MAX_HEALTH, 40.0D)
-                .add(Attributes.MOVEMENT_SPEED, 0.7D)
-                .add(Attributes.ATTACK_DAMAGE, 6.0D)
+                .add(Attributes.MAX_HEALTH, 30.0D) // 弱体化
+                .add(Attributes.MOVEMENT_SPEED, 0.25D)
+                .add(Attributes.ATTACK_DAMAGE, 4.0D) // 弱体化
                 .add(Attributes.FOLLOW_RANGE, 32.0D)
-                .add(Attributes.ARMOR, 2.0D)
-                .add(Attributes.KNOCKBACK_RESISTANCE, 0.3D);
-    }
-    // TungSahurEntity.java に以下のメソッドを追加
-    public static void init() {
-        SpawnPlacements.register(ModEntities.TUNG_SAHUR.get(),
-                SpawnPlacements.Type.ON_GROUND,
-                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                (entityType, world, reason, pos, random) -> {
-                    // 平和モード以外でのみスポーン
-                    if (world.getDifficulty() == Difficulty.PEACEFUL) return false;
-
-                    // 夜間のみスポーン
-                    if (world.getLevel().isDay()) return false;
-
-                    // 暗い場所でのみスポーン（ゾンビと同じ条件）
-                    boolean darkEnough = Monster.isDarkEnoughToSpawn(world, pos, random);
-
-                    // 基本的なモブスポーン条件
-                    boolean basicRules = Mob.checkMobSpawnRules(entityType, world, reason, pos, random);
-
-                    return darkEnough && basicRules;
-                });
-
-        // ログで確認
-        TungSahurMod.LOGGER.info("TungSahur自然スポーン設定完了（MCreatorスタイル）");
+                .add(Attributes.ARMOR, 1.0D) // 弱体化
+                .add(Attributes.KNOCKBACK_RESISTANCE, 0.2D); // 弱体化
     }
 
+    // === 完璧なAI管理システム ===
     @Override
-    public void onSyncedDataUpdated(EntityDataAccessor<?> key) {
-        if (SCALE_FACTOR.equals(key)) {
-            this.refreshDimensions();
-        }
-        super.onSyncedDataUpdated(key);
-    }
-
-    @Override
-    public EntityDimensions getDimensions(Pose pose) {
-        float scale = getScaleFactor();
-        return super.getDimensions(pose).scale(scale);
-    }
-
-    @Override
-    public SpawnGroupData finalizeSpawn(ServerLevelAccessor level, DifficultyInstance difficulty, MobSpawnType reason, @Nullable SpawnGroupData spawnData, @Nullable CompoundTag dataTag) {
-        // スポーン時に日数を設定
-        int currentDay = DayCountSavedData.get((ServerLevel) level.getLevel()).getDayCount();
-        setDayNumber(Math.max(1, Math.min(3, currentDay))); // 1-3日目のみ
-
-        // バットを装備
-        equipBat();
-
-        return super.finalizeSpawn(level, difficulty, reason, spawnData, dataTag);
-    }
-
-    // ティック処理
-    @Override
-    public void tick() {
-        super.tick();
+    public void aiStep() {
+        super.aiStep();
 
         if (!this.level().isClientSide) {
-            updateCooldowns();
+            updateAllTimers();
             updateWatchStatus();
-            updateWallClimbing();
             updateSprintStatus();
+            handleSpecialAttacks();
+            handleJumpLanding();
         }
     }
 
-    private void updateCooldowns() {
-        if (attackCooldown > 0) attackCooldown--;
-        if (throwCooldown > 0) throwCooldown--;
-        if (jumpCooldown > 0) jumpCooldown--;
-        if (watchCheckCooldown > 0) watchCheckCooldown--;
+    /**
+     * 全タイマーの更新
+     */
+    private void updateAllTimers() {
+        // 基本タイマー
+        if (this.attackCooldown > 0) this.attackCooldown--;
+        this.throwTimer++;
+        this.jumpTimer++;
+        if (this.watchCheckCooldown > 0) this.watchCheckCooldown--;
+
+        // 投擲状態の管理
+        if (this.isExecutingThrow) {
+            handleThrowExecution();
+        } else if (isCurrentlyThrowing()) {
+            // 投擲アニメーション状態を適切にリセット
+            setCurrentlyThrowing(false);
+        }
+
+        // ジャンプ状態の管理
+        if (this.isExecutingJump) {
+            handleJumpExecution();
+        } else if (isCurrentlyJumping()) {
+            // ジャンプアニメーション状態を適切にリセット
+            setCurrentlyJumping(false);
+        }
+
+        // 近接攻撃アニメーション状態の管理
+        if (isCurrentlyAttacking() && this.attackCooldown <= 0 && !this.isExecutingThrow && !this.isExecutingJump) {
+            setCurrentlyAttacking(false);
+        }
     }
 
+    /**
+     * 特殊攻撃の管理
+     */
+    private void handleSpecialAttacks() {
+        LivingEntity target = this.getTarget();
+        if (target == null || !target.isAlive()) return;
+        if (this.isExecutingThrow || this.isExecutingJump) return;
+
+        double distance = this.distanceTo(target);
+
+        // 投擲攻撃の判定（2日目以降）
+        if (this.getDayNumber() >= 2 && this.throwTimer >= this.nextThrowTime) {
+            if (shouldExecuteThrow(target, distance)) {
+                startThrowAttack(target);
+            }
+        }
+
+        // ジャンプ攻撃の判定（3日目のみ）
+        if (this.getDayNumber() >= 3 && this.jumpTimer >= this.nextJumpTime) {
+            if (shouldExecuteJump(target, distance)) {
+                startJumpAttack(target);
+            }
+        }
+    }
+
+    /**
+     * 投擲攻撃の実行判定
+     */
+    private boolean shouldExecuteThrow(LivingEntity target, double distance) {
+        // 距離条件：5-20ブロック
+        if (distance < 5.0D || distance > 20.0D) return false;
+
+        // 視線チェック
+        if (!this.hasLineOfSight(target)) return false;
+
+        // 見られている時は50%確率
+        if (this.isBeingWatched() && this.random.nextFloat() < 0.5F) return false;
+
+        return true;
+    }
+
+    /**
+     * ジャンプ攻撃の実行判定
+     */
+    private boolean shouldExecuteJump(LivingEntity target, double distance) {
+        // 距離条件：4-15ブロック
+        if (distance < 4.0D || distance > 15.0D) return false;
+
+        // 高低差がある場合優先
+        double heightDiff = target.getY() - this.getY();
+        if (heightDiff >= 2.0D) return true;
+
+        // 見られている時は30%確率
+        if (this.isBeingWatched() && this.random.nextFloat() < 0.3F) return false;
+
+        return distance >= 6.0D; // 中距離以上で実行
+    }
+
+    /**
+     * 投擲攻撃開始
+     */
+    private void startThrowAttack(LivingEntity target) {
+        this.isExecutingThrow = true;
+        this.throwPhase = 0;
+        this.throwChargeTime = switch (this.getDayNumber()) {
+            case 2 -> 15; // 0.75秒
+            case 3 -> 10; // 0.5秒
+            default -> 20; // 1秒
+        };
+
+        this.setCurrentlyThrowing(true);
+        this.getNavigation().stop();
+
+        // チャージ開始音
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.CROSSBOW_LOADING_START, SoundSource.HOSTILE, 0.6F, 1.2F);
+
+        TungSahurMod.LOGGER.debug("投擲攻撃開始: 距離={}", this.distanceTo(target));
+    }
+
+    /**
+     * ジャンプ攻撃開始
+     */
+    private void startJumpAttack(LivingEntity target) {
+        this.isExecutingJump = true;
+        this.jumpPhase = 0;
+        this.wasInAir = false;
+
+        this.setCurrentlyJumping(true);
+        this.getNavigation().stop();
+
+        // 準備音
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.RAVAGER_ROAR, SoundSource.HOSTILE, 0.7F, 1.3F);
+
+        TungSahurMod.LOGGER.debug("ジャンプ攻撃開始: 距離={}", this.distanceTo(target));
+    }
+
+    /**
+     * 投擲攻撃の実行処理
+     */
+    private void handleThrowExecution() {
+        LivingEntity target = this.getTarget();
+        if (target == null) {
+            stopThrowAttack();
+            return;
+        }
+
+        // ターゲット注視
+        this.getLookControl().setLookAt(target, 30.0F, 30.0F);
+
+        switch (this.throwPhase) {
+            case 0: // チャージフェーズ
+                this.throwChargeTime--;
+                if (this.throwChargeTime % 5 == 0 && this.level() instanceof ServerLevel serverLevel) {
+                    // チャージパーティクル
+                    Vec3 pos = this.position().add(0, this.getBbHeight() * 0.8, 0);
+                    serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
+                            pos.x, pos.y, pos.z, 2, 0.3, 0.3, 0.3, 0.02);
+                }
+
+                if (this.throwChargeTime <= 0) {
+                    this.throwPhase = 1;
+                    this.throwChargeTime = 8; // エイム時間
+
+                    // チャージ完了音
+                    this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                            SoundEvents.CROSSBOW_LOADING_END, SoundSource.HOSTILE, 0.7F, 1.0F);
+                }
+                break;
+
+            case 1: // エイムフェーズ
+                this.throwChargeTime--;
+                if (this.throwChargeTime % 3 == 0 && this.level() instanceof ServerLevel serverLevel) {
+                    // エイムパーティクル
+                    Vec3 direction = target.position().subtract(this.position()).normalize();
+                    Vec3 particlePos = this.position().add(direction.scale(2.0)).add(0, this.getBbHeight() * 0.8, 0);
+                    serverLevel.sendParticles(ParticleTypes.CRIT,
+                            particlePos.x, particlePos.y, particlePos.z, 1, 0.1, 0.1, 0.1, 0.02);
+                }
+
+                if (this.throwChargeTime <= 0) {
+                    executeThrowProjectile(target);
+                    stopThrowAttack();
+                    resetThrowTimer();
+                }
+                break;
+        }
+    }
+
+    /**
+     * ジャンプ攻撃の実行処理
+     */
+    private void handleJumpExecution() {
+        LivingEntity target = this.getTarget();
+        if (target == null) {
+            stopJumpAttack();
+            return;
+        }
+
+        switch (this.jumpPhase) {
+            case 0: // 準備フェーズ（15tick = 0.75秒）
+                this.jumpPhase++;
+
+                // ジャンプ実行
+                Vec3 direction = target.position().subtract(this.position()).normalize();
+                double jumpPower = 1.0D;
+                double distance = this.distanceTo(target);
+                double speedMultiplier = Math.min(1.5D, Math.max(0.8D, distance / 8.0D));
+
+                Vec3 jumpVec = direction.scale(speedMultiplier).add(0, jumpPower, 0);
+                this.setDeltaMovement(jumpVec);
+                this.wasInAir = true;
+
+                // ジャンプ音
+                this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                        SoundEvents.RAVAGER_STEP, SoundSource.HOSTILE, 0.8F, 1.0F);
+
+                TungSahurMod.LOGGER.debug("ジャンプ実行: ベクトル={}", jumpVec);
+                break;
+
+            case 1: // ジャンプ中
+                // 着地チェックは handleJumpLanding() で処理
+                if (this.level() instanceof ServerLevel serverLevel && this.random.nextInt(3) == 0) {
+                    // 飛行軌跡パーティクル
+                    serverLevel.sendParticles(ParticleTypes.SMOKE,
+                            this.getX(), this.getY() + this.getBbHeight() * 0.3, this.getZ(),
+                            1, 0.1, 0.1, 0.1, 0.01);
+                }
+                break;
+        }
+    }
+
+    /**
+     * ジャンプ着地の処理
+     */
+    private void handleJumpLanding() {
+        if (this.isExecutingJump && this.jumpPhase == 1 && this.wasInAir && this.onGround()) {
+            // 着地！
+            this.jumpPhase = 2;
+            performJumpLandingDamage();
+            stopJumpAttack();
+            resetJumpTimer();
+        }
+    }
+
+    /**
+     * ジャンプ着地ダメージ
+     */
+    private void performJumpLandingDamage() {
+        if (!(this.level() instanceof ServerLevel serverLevel)) return;
+
+        // 着地エフェクト
+        serverLevel.sendParticles(ParticleTypes.CLOUD,
+                this.getX(), this.getY(), this.getZ(), 3, 0.5, 0.1, 0.5, 0.1);
+
+        // 衝撃波パーティクル
+        for (int i = 0; i < 8; i++) {
+            double angle = (i / 8.0) * 2 * Math.PI;
+            double radius = 3.0; // 範囲縮小
+            double x = this.getX() + Math.cos(angle) * radius;
+            double z = this.getZ() + Math.sin(angle) * radius;
+
+            serverLevel.sendParticles(ParticleTypes.CRIT,
+                    x, this.getY() + 0.1, z, 1, 0.05, 0.05, 0.05, 0.05);
+        }
+
+        // 範囲ダメージ（大幅に弱体化）
+        AABB damageArea = new AABB(this.blockPosition()).inflate(3.0); // 範囲縮小
+        List<Entity> nearbyEntities = serverLevel.getEntities(this, damageArea);
+
+        for (Entity entity : nearbyEntities) {
+            if (entity instanceof LivingEntity living && entity != this) {
+                double distance = this.distanceTo(living);
+                if (distance <= 3.0) {
+                    // 控えめなダメージ
+                    float damage = (float) (3.0D * (1.0D - distance / 3.0D));
+                    damage = Math.max(damage, 1.0F);
+
+                    living.hurt(this.damageSources().mobAttack(this), damage);
+
+                    // 軽いノックバック（効果付与なし）
+                    Vec3 knockback = living.position().subtract(this.position()).normalize();
+                    living.setDeltaMovement(living.getDeltaMovement().add(
+                            knockback.x * 0.3D, 0.15D, knockback.z * 0.3D));
+
+                    TungSahurMod.LOGGER.debug("ジャンプ着地ダメージ: {}に{}ダメージ",
+                            living.getClass().getSimpleName(), damage);
+                }
+            }
+        }
+
+        // 着地音
+        serverLevel.playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.ANVIL_LAND, SoundSource.HOSTILE, 0.5F, 0.8F);
+    }
+
+    /**
+     * 投擲実行
+     */
+    private void executeThrowProjectile(LivingEntity target) {
+        Vec3 direction = target.position().subtract(this.position()).normalize();
+        TungBatProjectile projectile = new TungBatProjectile(this.level(), this);
+        projectile.setPos(this.getX(), this.getEyeY() - 0.1D, this.getZ());
+
+        double speed = 1.6D + (getDayNumber() * 0.3D);
+        projectile.shoot(direction.x, direction.y + 0.1D, direction.z, (float) speed, 1.0F);
+
+        this.level().addFreshEntity(projectile);
+
+        // 投擲音
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.CROSSBOW_SHOOT, SoundSource.HOSTILE, 0.9F, 0.9F);
+
+        TungSahurMod.LOGGER.debug("投擲実行完了");
+    }
+
+    /**
+     * 近接攻撃の実行
+     */
+    public void performMeleeAttack(LivingEntity target) {
+        this.setCurrentlyAttacking(true);
+
+        // 基本攻撃実行
+        boolean hitSuccessful = this.doHurtTarget(target);
+
+        if (hitSuccessful) {
+            // 控えめな追加ダメージ
+            float additionalDamage = this.getDayNumber() * 0.5F; // 大幅に弱体化
+            target.hurt(this.damageSources().mobAttack(this), additionalDamage);
+
+            // 軽いノックバック（効果付与なし）
+            Vec3 direction = target.position().subtract(this.position()).normalize();
+            double knockbackStrength = 0.15D + (this.getDayNumber() * 0.05D); // 弱体化
+            target.setDeltaMovement(target.getDeltaMovement().add(
+                    direction.x * knockbackStrength, 0.08D, direction.z * knockbackStrength));
+
+            // 攻撃エフェクト
+            spawnMeleeAttackEffects();
+
+            TungSahurMod.LOGGER.debug("近接攻撃成功: 追加ダメージ={}", additionalDamage);
+        }
+
+        // クールダウン設定
+        this.attackCooldown = switch (this.getDayNumber()) {
+            case 1 -> 30; // 1.5秒
+            case 2 -> 25; // 1.25秒
+            case 3 -> 20; // 1秒
+            default -> 30;
+        };
+
+        // 攻撃状態を少し後にリセット
+        this.level().scheduleTick(this.blockPosition(),
+                this.level().getBlockState(this.blockPosition()).getBlock(), 15);
+    }
+
+    /**
+     * 近接攻撃エフェクト
+     */
+    private void spawnMeleeAttackEffects() {
+        // バットスイング音
+        SoundEvent swingSound = switch (this.getDayNumber()) {
+            case 1 -> SoundEvents.PLAYER_ATTACK_SWEEP;
+            case 2 -> SoundEvents.PLAYER_ATTACK_STRONG;
+            case 3 -> SoundEvents.PLAYER_ATTACK_CRIT;
+            default -> SoundEvents.PLAYER_ATTACK_SWEEP;
+        };
+
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                swingSound, SoundSource.HOSTILE, 0.9F, 0.8F + (this.getDayNumber() * 0.1F));
+
+        // スイングパーティクル
+        if (this.level() instanceof ServerLevel serverLevel) {
+            Vec3 pos = this.position().add(0, this.getBbHeight() * 0.7, 0);
+
+            for (int i = 0; i < 3 + this.getDayNumber(); i++) {
+                double x = pos.x + (this.random.nextDouble() - 0.5) * 2.0;
+                double y = pos.y + (this.random.nextDouble() - 0.5) * 0.5;
+                double z = pos.z + (this.random.nextDouble() - 0.5) * 2.0;
+
+                serverLevel.sendParticles(ParticleTypes.SWEEP_ATTACK,
+                        x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
+            }
+        }
+    }
+
+    /**
+     * 攻撃停止処理
+     */
+    private void stopThrowAttack() {
+        this.isExecutingThrow = false;
+        this.throwPhase = 0;
+        this.throwChargeTime = 0;
+
+        // アニメーション状態を遅延リセット
+        this.level().scheduleTick(this.blockPosition(),
+                this.level().getBlockState(this.blockPosition()).getBlock(), 10);
+    }
+
+    private void stopJumpAttack() {
+        this.isExecutingJump = false;
+        this.jumpPhase = 0;
+        this.wasInAir = false;
+
+        // アニメーション状態を遅延リセット
+        this.level().scheduleTick(this.blockPosition(),
+                this.level().getBlockState(this.blockPosition()).getBlock(), 10);
+    }
+
+    /**
+     * タイマーリセット
+     */
+    private void resetThrowTimer() {
+        this.throwTimer = 0;
+        this.nextThrowTime = THROW_INTERVAL_MIN + this.random.nextInt(THROW_INTERVAL_MAX - THROW_INTERVAL_MIN);
+
+        // 3日目は頻度アップ
+        if (this.getDayNumber() >= 3) {
+            this.nextThrowTime = (int) (this.nextThrowTime * 0.7);
+        }
+
+        TungSahurMod.LOGGER.debug("次回投擲: {}tick後", this.nextThrowTime);
+    }
+
+    private void resetJumpTimer() {
+        this.jumpTimer = 0;
+        this.nextJumpTime = JUMP_INTERVAL_MIN + this.random.nextInt(JUMP_INTERVAL_MAX - JUMP_INTERVAL_MIN);
+
+        TungSahurMod.LOGGER.debug("次回ジャンプ: {}tick後", this.nextJumpTime);
+    }
+
+    // === 攻撃可能チェック ===
+    public boolean canAttack() {
+        return this.attackCooldown <= 0 && !this.isExecutingThrow && !this.isExecutingJump;
+    }
+
+    // === 既存のシステム（監視、スプリント等）===
     private void updateWatchStatus() {
         if (watchCheckCooldown > 0) return;
-        watchCheckCooldown = 5; // 5ティック毎にチェック
+        watchCheckCooldown = 5;
 
         Player watchingPlayer = findWatchingPlayer();
         boolean currentlyWatched = watchingPlayer != null;
@@ -254,8 +682,6 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         Vec3 playerLook = player.getViewVector(1.0F);
         Vec3 toEntity = this.position().subtract(player.getEyePosition()).normalize();
         double dot = playerLook.dot(toEntity);
-
-        // より厳密な視線判定
         return dot > 0.7D && player.hasLineOfSight(this);
     }
 
@@ -264,21 +690,14 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         double maxWatchDistance = 16.0D;
         double minWatchDistance = 2.0D;
 
-        // 距離による速度減少計算
         double distanceRatio = Math.max(0.0, Math.min(1.0,
                 (distance - minWatchDistance) / (maxWatchDistance - minWatchDistance)));
 
-        // 基本減速率（見られているだけで50%減速）
         double baseReduction = 0.5D;
-
-        // 距離による追加減速（近づくほど更に遅くなる）
-        double distanceReduction = (1.0 - distanceRatio) * 0.4D; // 最大40%追加減速
-
-        // 最終的な速度倍率を計算
+        double distanceReduction = (1.0 - distanceRatio) * 0.4D;
         double totalReduction = baseReduction + distanceReduction;
-        double speedMultiplier = Math.max(0.02D, 1.0D - totalReduction); // 最低2%の速度は維持
+        double speedMultiplier = Math.max(0.02D, 1.0D - totalReduction);
 
-        // 日数に応じた基本速度
         double baseSpeed = getBaseSpeedForDay();
         double adjustedSpeed = baseSpeed * speedMultiplier;
 
@@ -299,45 +718,13 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         };
     }
 
-    private void updateWallClimbing() {
-        if (isBeingWatched()) {
-            setWallClimbing(false);
-            return;
-        }
-
-        boolean shouldClimb = this.horizontalCollision &&
-                this.getTarget() != null &&
-                !this.onGround() &&
-                this.getDeltaMovement().y <= 0.0D;
-
-        if (shouldClimb && !isWallClimbing()) {
-            setWallClimbing(true);
-        } else if (!shouldClimb && isWallClimbing()) {
-            setWallClimbing(false);
-        }
-
-        // 壁登り中の物理処理
-        if (isWallClimbing()) {
-            performWallClimbing();
-        }
-    }
-
-    private void performWallClimbing() {
-        // 蜘蛛のような壁登り実装
-        if (this.horizontalCollision) {
-            Vec3 movement = this.getDeltaMovement();
-            this.setDeltaMovement(movement.x, 0.2D, movement.z);
-        }
-    }
-
     private void updateSprintStatus() {
         LivingEntity target = this.getTarget();
         if (target instanceof Player player) {
             boolean playerSprinting = player.isSprinting();
-            if (playerSprinting != isSprinting() && !isBeingWatched()) {
+            if (playerSprinting != isSprinting() && !isBeingWatched() && !isExecutingThrow && !isExecutingJump) {
                 setSprinting(playerSprinting);
 
-                // スプリント状態に応じて速度調整
                 double baseSpeed = getBaseSpeedForDay();
                 double sprintMultiplier = playerSprinting ? 1.5D : 1.0D;
                 this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(baseSpeed * sprintMultiplier);
@@ -345,7 +732,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         }
     }
 
-    // バット装備
+    // === バット装備 ===
     private void equipBat() {
         ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
         CompoundTag tag = batStack.getOrCreateTag();
@@ -354,73 +741,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.setItemInHand(InteractionHand.MAIN_HAND, batStack);
     }
 
-    // 攻撃関連メソッド
-    public boolean canAttack() {
-        return attackCooldown <= 0;
-    }
-
-    public boolean canThrow() {
-        return throwCooldown <= 0 && getDayNumber() >= 2; // 2日目以降
-    }
-
-    public boolean canJumpAttack() {
-        return jumpCooldown <= 0 && getDayNumber() >= 3; // 3日目のみ
-    }
-
-    public void setAttackCooldown(int ticks) {
-        this.attackCooldown = ticks;
-    }
-
-    public void setThrowCooldown(int ticks) {
-        this.throwCooldown = ticks;
-    }
-
-    public void setJumpCooldown(int ticks) {
-        this.jumpCooldown = ticks;
-    }
-
-    // 投擲攻撃
-    public void performThrowAttack(LivingEntity target) {
-        if (!canThrow()) return;
-
-        Vec3 direction = target.position().subtract(this.position()).normalize();
-        TungBatProjectile projectile = new TungBatProjectile(this.level(), this);
-        projectile.setPos(this.getX(), this.getEyeY() - 0.1D, this.getZ());
-
-        double speed = 1.5D + (getDayNumber() * 0.3D);
-        projectile.shoot(direction.x, direction.y + 0.1D, direction.z, (float) speed, 1.0F);
-
-        this.level().addFreshEntity(projectile);
-        setThrowCooldown(40 + this.random.nextInt(20)); // 2-3秒のクールダウン        setCurrentlyThrowing(true);
-
-        // サウンド
-        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
-                SoundEvents.SNOWBALL_THROW, SoundSource.HOSTILE, 0.8F, 0.8F);
-    }
-
-    // ジャンプ攻撃
-    public void performJumpAttack(LivingEntity target) {
-        if (!canJumpAttack()) return;
-
-        Vec3 direction = target.position().subtract(this.position()).normalize();
-        double jumpPower = 1.2D;
-
-        this.setDeltaMovement(direction.x * jumpPower, jumpPower, direction.z * jumpPower);
-        setJumpCooldown(100 + this.random.nextInt(60)); // 5-8秒のクールダウン
-        setCurrentlyJumping(true);
-
-        // サウンドとパーティクル
-        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
-                SoundEvents.RAVAGER_ROAR, SoundSource.HOSTILE, 1.0F, 1.0F);
-
-        if (this.level() instanceof ServerLevel serverLevel) {
-            serverLevel.sendParticles(ParticleTypes.EXPLOSION,
-                    this.getX(), this.getY(), this.getZ(),
-                    1, 0.0D, 0.0D, 0.0D, 0.0D);
-        }
-    }
-
-    // アニメーション制御
+    // === アニメーション制御 ===
     @Override
     public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
         controllers.add(new AnimationController<>(this, "controller", 0, this::predicate));
@@ -462,7 +783,6 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             return PlayState.CONTINUE;
         }
 
-        // 日数に応じたIdleアニメーション
         RawAnimation idleAnim = switch (getDayNumber()) {
             case 2 -> IDLE_DAY2_ANIM;
             case 3 -> IDLE_DAY3_ANIM;
@@ -478,7 +798,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         return cache;
     }
 
-    // ゲッター・セッター
+    // === ゲッター・セッター ===
     public int getDayNumber() {
         return this.entityData.get(DAY_NUMBER);
     }
@@ -492,32 +812,29 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     private void updateScaleForDay(int day) {
         float scale = switch (day) {
-            case 1 -> 1.0F;     // 普通サイズ
-            case 2 -> 1.3F;     // 中くらいサイズ
-            case 3 -> 1.7F;     // かなり大きい
+            case 1 -> 1.0F;
+            case 2 -> 1.3F;
+            case 3 -> 1.7F;
             default -> 1.0F;
         };
         setScaleFactor(scale);
     }
 
     private void updateAttributesForDay(int day) {
-        // 日数に応じて能力値を調整
         switch (day) {
             case 1:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(40.0D);
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(6.0D);
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(30.0D); // 弱体化
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(4.0D); // 弱体化
                 break;
             case 2:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(60.0D);
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(9.0D);
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(40.0D); // 弱体化
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(5.0D); // 弱体化
                 break;
             case 3:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(80.0D);
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(12.0D);
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(50.0D); // 弱体化
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(6.0D); // 弱体化
                 break;
         }
-
-        // HPを最大値に設定
         this.setHealth(this.getMaxHealth());
     }
 
@@ -578,16 +895,25 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.entityData.set(IS_SPRINTING, sprinting);
     }
 
-    // NBT保存
+    // === その他の既存メソッド ===
+    @Override
+    public SpawnGroupData finalizeSpawn(ServerLevelAccessor level, DifficultyInstance difficulty, MobSpawnType reason, @Nullable SpawnGroupData spawnData, @Nullable CompoundTag dataTag) {
+        int currentDay = DayCountSavedData.get((ServerLevel) level.getLevel()).getDayCount();
+        setDayNumber(Math.max(1, Math.min(3, currentDay)));
+        equipBat();
+        return super.finalizeSpawn(level, difficulty, reason, spawnData, dataTag);
+    }
+
     @Override
     public void addAdditionalSaveData(CompoundTag tag) {
         super.addAdditionalSaveData(tag);
         tag.putInt("DayNumber", getDayNumber());
         tag.putFloat("ScaleFactor", getScaleFactor());
         tag.putInt("AttackCooldown", attackCooldown);
-        tag.putInt("ThrowCooldown", throwCooldown);
-        tag.putInt("JumpCooldown", jumpCooldown);
-        tag.putBoolean("IsWallClimbing", isWallClimbing());
+        tag.putInt("ThrowTimer", throwTimer);
+        tag.putInt("JumpTimer", jumpTimer);
+        tag.putInt("NextThrowTime", nextThrowTime);
+        tag.putInt("NextJumpTime", nextJumpTime);
     }
 
     @Override
@@ -596,34 +922,12 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         setDayNumber(tag.getInt("DayNumber"));
         setScaleFactor(tag.getFloat("ScaleFactor"));
         attackCooldown = tag.getInt("AttackCooldown");
-        throwCooldown = tag.getInt("ThrowCooldown");
-        jumpCooldown = tag.getInt("JumpCooldown");
-        setWallClimbing(tag.getBoolean("IsWallClimbing"));
+        throwTimer = tag.getInt("ThrowTimer");
+        jumpTimer = tag.getInt("JumpTimer");
+        nextThrowTime = tag.getInt("NextThrowTime");
+        nextJumpTime = tag.getInt("NextJumpTime");
     }
 
-    // スポーン条件
-    public static boolean checkTungSahurSpawnRules(EntityType<TungSahurEntity> entityType,
-                                                   ServerLevelAccessor level,
-                                                   MobSpawnType spawnType,
-                                                   BlockPos pos,
-                                                   RandomSource random) {
-        return pos.getY() <= 50 &&
-                isDarkEnoughToSpawn(level, pos, random) &&
-                checkMobSpawnRules(entityType, level, spawnType, pos, random);
-    }
-
-    public static boolean isDarkEnoughToSpawn(ServerLevelAccessor level, BlockPos pos, RandomSource random) {
-        if (level.getBrightness(LightLayer.SKY, pos) > random.nextInt(32)) {
-            return false;
-        } else {
-            int light = level.getLevel().isThundering() ?
-                    level.getLevel().getMaxLocalRawBrightness(pos, 10) :
-                    level.getMaxLocalRawBrightness(pos);
-            return light <= random.nextInt(8);
-        }
-    }
-
-    // サウンド
     @Override
     protected SoundEvent getAmbientSound() {
         return SoundEvents.ENDERMAN_AMBIENT;
@@ -641,22 +945,15 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     @Override
     public boolean hurt(DamageSource damageSource, float amount) {
-        // 見られている時はダメージ増加
         if (isBeingWatched()) {
             amount *= 1.3F;
         }
         return super.hurt(damageSource, amount);
     }
 
-    @Override
-    protected boolean canRide(Entity entity) {
-        return false;
-    }
-
-    @Override
-    public boolean canBeAffected(net.minecraft.world.effect.MobEffectInstance effect) {
-        // プレイヤーに効果を付与させないための処理
-        // このエンティティ自体は効果を受けられる
-        return true;
+    public String getDebugInfo() {
+        return String.format("TungSahur[Day=%d, ThrowIn=%d, JumpIn=%d, ExecThrow=%s, ExecJump=%s]",
+                getDayNumber(), Math.max(0, nextThrowTime - throwTimer),
+                Math.max(0, nextJumpTime - jumpTimer), isExecutingThrow, isExecutingJump);
     }
 }

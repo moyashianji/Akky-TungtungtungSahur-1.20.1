@@ -1,6 +1,7 @@
-// TungSahurMeleeAttackGoal.java - 近接攻撃ゴール
+// TungSahurMeleeAttackGoal.java - 完璧な近接攻撃
 package com.tungsahur.mod.entity.goals;
 
+import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.entity.TungSahurEntity;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
@@ -13,7 +14,7 @@ import net.minecraft.world.phys.Vec3;
 
 public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
     private final TungSahurEntity tungSahur;
-    private int attackAnimationTick = 0;
+    private int attackPreparationTime = 0;
     private boolean isPreparingAttack = false;
 
     public TungSahurMeleeAttackGoal(TungSahurEntity tungSahur, double speedModifier, boolean followingTargetEvenIfNotSeen) {
@@ -31,17 +32,19 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
 
         double distance = tungSahur.distanceTo(target);
 
-        // 日数に応じた攻撃距離の大幅拡張
+        // 日数に応じた攻撃距離（バットの長いリーチ）
         double maxAttackDistance = switch (tungSahur.getDayNumber()) {
-            case 1 -> 4.5D; // 1日目: 4.5ブロック
-            case 2 -> 5.0D; // 2日目: 5ブロック
-            case 3 -> 5.5D; // 3日目: 5.5ブロック
-            default -> 4.5D;
+            case 1 -> 3.5D; // 1日目: 3.5ブロック
+            case 2 -> 4.0D; // 2日目: 4ブロック
+            case 3 -> 4.5D; // 3日目: 4.5ブロック
+            default -> 3.5D;
         };
 
-        return distance <= maxAttackDistance;
-    }
+        boolean inRange = distance <= maxAttackDistance;
+        boolean hasLineOfSight = tungSahur.hasLineOfSight(target);
 
+        return inRange && hasLineOfSight;
+    }
 
     @Override
     public boolean canContinueToUse() {
@@ -52,58 +55,47 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
         if (target == null) return false;
 
         double distance = tungSahur.distanceTo(target);
-        return distance <= 6.0D; // 継続可能距離も拡張
+        return distance <= 5.0D; // 継続可能距離
     }
+
     @Override
     protected void checkAndPerformAttack(LivingEntity target, double distToTargetSqr) {
-        double d0 = this.getAttackReachSqr(target);
+        double attackReachSqr = this.getAttackReachSqr(target);
 
-        if (distToTargetSqr <= d0 && this.isTimeToAttack()) {
-            this.resetAttackCooldown();
+        if (distToTargetSqr <= attackReachSqr && this.isTimeToAttack()) {
             performEnhancedAttack(target);
         }
     }
 
+    /**
+     * 強化された攻撃実行
+     */
     private void performEnhancedAttack(LivingEntity target) {
         if (!tungSahur.canAttack()) return;
 
         // 攻撃準備開始
         isPreparingAttack = true;
-        attackAnimationTick = 0;
-        tungSahur.setCurrentlyAttacking(true);
-
-        // 準備時間（日数が高いほど短い）
-        int preparationTime = switch (tungSahur.getDayNumber()) {
-            case 1 -> 15; // 0.75秒
-            case 2 -> 12; // 0.6秒
-            case 3 -> 10; // 0.5秒
-            default -> 15;
+        attackPreparationTime = switch (tungSahur.getDayNumber()) {
+            case 1 -> 10; // 0.5秒
+            case 2 -> 8;  // 0.4秒
+            case 3 -> 5;  // 0.25秒
+            default -> 10;
         };
 
-        // 攻撃実行をスケジュール
-        tungSahur.level().scheduleTick(tungSahur.blockPosition(),
-                tungSahur.level().getBlockState(tungSahur.blockPosition()).getBlock(),
-                preparationTime);
+        tungSahur.setCurrentlyAttacking(true);
 
+        // 実際の攻撃実行
         executeAttack(target);
     }
 
     private void executeAttack(LivingEntity target) {
-        // 基本攻撃力に日数ボーナスを追加
-        float baseDamage = (float) tungSahur.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
-        float dayBonus = tungSahur.getDayNumber() * 1.5F;
-        float totalDamage = baseDamage + dayBonus;
-
-        // スケールによるダメージボーナス
-        float scaleBonus = (tungSahur.getScaleFactor() - 1.0F) * 2.0F;
-        totalDamage += scaleBonus;
-
-        // 実際の攻撃実行
+        // 基本攻撃実行
         boolean hitSuccessful = tungSahur.doHurtTarget(target);
 
         if (hitSuccessful) {
-            // 追加ダメージ適用
-            target.hurt(tungSahur.damageSources().mobAttack(tungSahur), totalDamage - baseDamage);
+            // 日数に応じた追加ダメージ
+            float additionalDamage = tungSahur.getDayNumber() * 1.5F;
+            target.hurt(tungSahur.damageSources().mobAttack(tungSahur), additionalDamage);
 
             // 日数に応じた特殊効果
             applyDaySpecificEffects(target);
@@ -112,119 +104,112 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
             applyKnockback(target);
 
             // パーティクルとサウンド
-            spawnAttackEffects(target);
+            spawnAttackEffects();
+
+
+
+
+            TungSahurMod.LOGGER.debug("TungSahur近接攻撃成功: Day={}, ダメージ追加={}",
+                    tungSahur.getDayNumber(), additionalDamage);
         }
 
-        // クールダウン設定
-        int cooldown = switch (tungSahur.getDayNumber()) {
-            case 1 -> 40; // 2秒
-            case 2 -> 35; // 1.75秒
-            case 3 -> 30; // 1.5秒
-            default -> 40;
-        };
-
-        tungSahur.setAttackCooldown(cooldown);
-
-        // 攻撃状態リセット
+        // 攻撃完了
         isPreparingAttack = false;
         tungSahur.setCurrentlyAttacking(false);
     }
 
+    /**
+     * 日数に応じた特殊効果
+     */
     private void applyDaySpecificEffects(LivingEntity target) {
         switch (tungSahur.getDayNumber()) {
             case 1:
-                // 1日目：基本攻撃のみ、追加効果なし
+                // 1日目: 基本的なノックバック
                 break;
-
             case 2:
-                // 2日目：軽い出血効果（継続ダメージ）
-                if (tungSahur.level() instanceof ServerLevel) {
-                    target.hurt(tungSahur.damageSources().mobAttack(tungSahur), 1.0F);
-                }
+                // 2日目: 少し強いノックバック
+                Vec3 knockback2 = target.position().subtract(tungSahur.position()).normalize();
+                target.setDeltaMovement(target.getDeltaMovement().add(
+                        knockback2.x * 0.3D, 0.1D, knockback2.z * 0.3D));
                 break;
-
             case 3:
-                // 3日目：強力な出血効果
-                if (tungSahur.level() instanceof ServerLevel) {
-                    target.hurt(tungSahur.damageSources().mobAttack(tungSahur), 2.0F);
-                    // 追加の混乱効果（視界を少し揺らす）
-                    if (target instanceof net.minecraft.world.entity.player.Player) {
-                        // プレイヤーには効果を付与しない（要求仕様）
-                    }
+                // 3日目: 強いノックバック + パーティクル
+                Vec3 knockback3 = target.position().subtract(tungSahur.position()).normalize();
+                target.setDeltaMovement(target.getDeltaMovement().add(
+                        knockback3.x * 0.5D, 0.2D, knockback3.z * 0.5D));
+
+                if (tungSahur.level() instanceof ServerLevel serverLevel) {
+                    serverLevel.sendParticles(ParticleTypes.CRIT,
+                            target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ(),
+                            5, 0.3, 0.3, 0.3, 0.1);
                 }
                 break;
         }
     }
 
+    /**
+     * ノックバック効果
+     */
     private void applyKnockback(LivingEntity target) {
-        // 日数とスケールに応じたノックバック
-        float knockbackStrength = tungSahur.getDayNumber() * 0.3F + (tungSahur.getScaleFactor() - 1.0F) * 0.4F;
-
         Vec3 direction = target.position().subtract(tungSahur.position()).normalize();
-        Vec3 knockbackVec = direction.scale(knockbackStrength);
+        double knockbackStrength = 0.2D + (tungSahur.getDayNumber() * 0.1D);
 
-        target.setDeltaMovement(target.getDeltaMovement().add(knockbackVec.x, Math.max(0.1D, knockbackVec.y * 0.5D), knockbackVec.z));
-        target.hurtMarked = true;
+        target.setDeltaMovement(target.getDeltaMovement().add(
+                direction.x * knockbackStrength,
+                0.1D,
+                direction.z * knockbackStrength));
     }
 
-    private void spawnAttackEffects(LivingEntity target) {
-        if (!(tungSahur.level() instanceof ServerLevel serverLevel)) return;
-
-        // 攻撃時のパーティクル
-        Vec3 attackPos = target.position().add(0, target.getBbHeight() * 0.5, 0);
-
-        // 基本の攻撃パーティクル
-        serverLevel.sendParticles(ParticleTypes.CRIT,
-                attackPos.x, attackPos.y, attackPos.z,
-                5 + tungSahur.getDayNumber() * 2,
-                0.2D, 0.2D, 0.2D, 0.1D);
-
-        // 日数に応じた追加パーティクル
-        switch (tungSahur.getDayNumber()) {
-            case 2:
-                serverLevel.sendParticles(ParticleTypes.DAMAGE_INDICATOR,
-                        attackPos.x, attackPos.y, attackPos.z,
-                        3, 0.3D, 0.3D, 0.3D, 0.1D);
-                break;
-
-            case 3:
-                serverLevel.sendParticles(ParticleTypes.DAMAGE_INDICATOR,
-                        attackPos.x, attackPos.y, attackPos.z,
-                        5, 0.5D, 0.5D, 0.5D, 0.1D);
-
-                serverLevel.sendParticles(ParticleTypes.SWEEP_ATTACK,
-                        attackPos.x, attackPos.y, attackPos.z,
-                        1, 0.0D, 0.0D, 0.0D, 0.0D);
-                break;
-        }
-
-        // サウンド効果
-        SoundEvent attackSound = switch (tungSahur.getDayNumber()) {
+    /**
+     * 攻撃エフェクト
+     */
+    private void spawnAttackEffects() {
+        // バットスイング音
+        SoundEvent swingSound = switch (tungSahur.getDayNumber()) {
             case 1 -> SoundEvents.PLAYER_ATTACK_SWEEP;
             case 2 -> SoundEvents.PLAYER_ATTACK_STRONG;
             case 3 -> SoundEvents.PLAYER_ATTACK_CRIT;
             default -> SoundEvents.PLAYER_ATTACK_SWEEP;
         };
 
-        tungSahur.level().playSound(null, tungSahur.getX(), tungSahur.getY(), tungSahur.getZ(),
-                attackSound, SoundSource.HOSTILE,
-                0.8F + tungSahur.getDayNumber() * 0.1F,
-                0.8F + tungSahur.getDayNumber() * 0.1F);
+        tungSahur.level().playSound(null,
+                tungSahur.getX(), tungSahur.getY(), tungSahur.getZ(),
+                swingSound, SoundSource.HOSTILE,
+                0.8F, 0.8F + (tungSahur.getDayNumber() * 0.1F));
 
-        // バットの振り音
-        tungSahur.level().playSound(null, tungSahur.getX(), tungSahur.getY(), tungSahur.getZ(),
-                SoundEvents.PLAYER_ATTACK_SWEEP, SoundSource.HOSTILE,
-                0.6F, 1.2F);
+        // パーティクル効果
+        if (tungSahur.level() instanceof ServerLevel serverLevel) {
+            Vec3 tungPos = tungSahur.position();
+
+            // スイング軌跡パーティクル
+            for (int i = 0; i < 3 + tungSahur.getDayNumber(); i++) {
+                double x = tungPos.x + (tungSahur.getRandom().nextDouble() - 0.5) * 2.0;
+                double y = tungPos.y + tungSahur.getBbHeight() * 0.7;
+                double z = tungPos.z + (tungSahur.getRandom().nextDouble() - 0.5) * 2.0;
+
+                serverLevel.sendParticles(ParticleTypes.SWEEP_ATTACK,
+                        x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
+            }
+        }
     }
 
+    /**
+     * 攻撃距離の計算（バットの長さを考慮）
+     */
     @Override
-    protected double getAttackReachSqr(LivingEntity attackTarget) {
-        // 基本攻撃範囲を大幅拡張
-        double baseReach = tungSahur.getBbWidth() * 3.5D + attackTarget.getBbWidth(); // 2.0Dから3.5Dに拡張
-        double dayBonus = tungSahur.getDayNumber() * 0.5D; // 0.3Dから0.5Dに拡張
-        double scaleBonus = (tungSahur.getScaleFactor() - 1.0D) * 0.8D; // 0.5Dから0.8Dに拡張
+    protected double getAttackReachSqr(LivingEntity target) {
+        double baseReach = switch (tungSahur.getDayNumber()) {
+            case 1 -> 3.5D;
+            case 2 -> 4.0D;
+            case 3 -> 4.5D;
+            default -> 3.5D;
+        };
 
-        return (baseReach + dayBonus + scaleBonus) * (baseReach + dayBonus + scaleBonus);
+        // スケールファクターによる調整
+        double scaleBonus = (tungSahur.getScaleFactor() - 1.0F) * 1.5D;
+        double totalReach = baseReach + scaleBonus;
+
+        return totalReach * totalReach;
     }
 
     @Override
@@ -235,7 +220,6 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
 
     @Override
     protected boolean isTimeToAttack() {
-        // 独自のクールダウン管理を使用
         return tungSahur.canAttack() && !isPreparingAttack;
     }
 
@@ -244,14 +228,18 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
         super.tick();
 
         if (isPreparingAttack) {
-            attackAnimationTick++;
+            attackPreparationTime--;
 
             // 準備中のパーティクル
-            if (attackAnimationTick % 3 == 0 && tungSahur.level() instanceof ServerLevel serverLevel) {
+            if (attackPreparationTime % 3 == 0 && tungSahur.level() instanceof ServerLevel serverLevel) {
                 Vec3 tungPos = tungSahur.position().add(0, tungSahur.getBbHeight() * 0.8, 0);
                 serverLevel.sendParticles(ParticleTypes.ANGRY_VILLAGER,
                         tungPos.x, tungPos.y, tungPos.z,
                         1, 0.2D, 0.2D, 0.2D, 0.0D);
+            }
+
+            if (attackPreparationTime <= 0) {
+                isPreparingAttack = false;
             }
         }
     }
@@ -261,6 +249,6 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
         super.stop();
         isPreparingAttack = false;
         tungSahur.setCurrentlyAttacking(false);
-        attackAnimationTick = 0;
+        attackPreparationTime = 0;
     }
 }

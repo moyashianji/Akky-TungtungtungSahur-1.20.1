@@ -53,18 +53,8 @@ public class ModEntities {
         TungSahurMod.LOGGER.info("ModEntities登録完了");
     }
 
-    /**
-     * スポーン設定の登録
-     */
-    public static void registerSpawnPlacements() {
-        SpawnPlacements.register(TUNG_SAHUR.get(),
-                SpawnPlacements.Type.ON_GROUND,
-                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                TungSahurEntity::checkTungSahurSpawnRules);
 
 
-        TungSahurMod.LOGGER.info("TungSahurスポーン設定登録完了");
-    }
 
     /**
      * エンティティがワールドに参加した時のイベント処理

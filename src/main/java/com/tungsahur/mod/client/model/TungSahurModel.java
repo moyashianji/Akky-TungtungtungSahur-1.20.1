@@ -30,10 +30,6 @@ public class TungSahurModel extends GeoModel<TungSahurEntity> {
             default -> DAY_1_MODEL; // 1日目（普通サイズ）- デフォルト
         };
 
-        // デバッグ用：モデルパスをログに出力（初回とモデル変更時のみ）
-        if (entity.tickCount <= 1 || (entity.tickCount % 100 == 0 && TungSahurMod.isDebugMode())) {
-            TungSahurMod.LOGGER.debug("TungSahur Day {} -> モデル: {}", dayNumber, modelPath);
-        }
 
         return modelPath;
     }
@@ -48,10 +44,7 @@ public class TungSahurModel extends GeoModel<TungSahurEntity> {
             default -> new ResourceLocation(TungSahurMod.MODID, "textures/entity/tung_sahur_stage1.png");
         };
 
-        // デバッグ用：テクスチャパスをログに出力（初回とテクスチャ変更時のみ）
-        if (entity.tickCount <= 1 || (entity.tickCount % 100 == 0 && TungSahurMod.isDebugMode())) {
-            TungSahurMod.LOGGER.debug("TungSahur Day {} -> テクスチャ: {}", dayNumber, texturePath);
-        }
+
 
         return texturePath;
     }

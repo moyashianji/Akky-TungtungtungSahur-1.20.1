@@ -213,7 +213,7 @@ public class ClientSetup {
             ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
                     new ResourceLocation(TungSahurMod.MODID, "debug_mode"),
                     (itemStack, clientLevel, livingEntity, seed) -> {
-                        return TungSahurMod.isDebugMode() ? 1.0F : 0.0F;
+                        return 0.0F;
                     });
 
             // エンティティ状態表示プロパティ
@@ -269,7 +269,7 @@ public class ClientSetup {
         TungSahurMod.LOGGER.info("=== TungSahur レンダリング統計 ===");
         TungSahurMod.LOGGER.info("登録済みエンティティレンダラー数: 2");
         TungSahurMod.LOGGER.info("登録済みアイテムプロパティ数: 10+");
-        TungSahurMod.LOGGER.info("デバッグモード: {}", TungSahurMod.isDebugMode());
+
         TungSahurMod.LOGGER.info("==================================");
     }
 }

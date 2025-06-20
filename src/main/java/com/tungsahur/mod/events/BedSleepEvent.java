@@ -1,9 +1,10 @@
-// BedSleepEvent.java - 恐怖の睡眠阻害システム
+// BedSleepEvent.java - ゲーム状態に対応した睡眠制御
 package com.tungsahur.mod.events;
 
 import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
+import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -77,24 +78,33 @@ public class BedSleepEvent {
     private static final Random RANDOM = new Random();
 
     /**
-     * プレイヤーがベッドに触れた時 - 完全に睡眠を阻害
+     * プレイヤーがベッドに触れた時 - ゲーム状態に応じて睡眠制御
      */
     @SubscribeEvent
     public static void onPlayerSleepInBed(PlayerSleepInBedEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
 
         ServerLevel level = player.serverLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
-        int currentDay = dayData.getDayCount();
+        GameStateManager gameState = GameStateManager.get(level);
 
-        // 睡眠を完全に阻止
-        event.setResult(Player.BedSleepingProblem.OTHER_PROBLEM);
+        // ゲーム終了後は睡眠を許可
+        if (gameState.isSleepAllowed()) {
+            // 睡眠成功メッセージ
+            player.sendSystemMessage(Component.literal("§a3日間の恐怖が終わり、ついに安らかに眠ることができる...")
+                    .withStyle(ChatFormatting.GREEN, ChatFormatting.ITALIC));
+            return; // 通常の睡眠処理を続行
+        }
 
-        // 恐怖演出を実行
-        executeTerrifyingSleepPrevention(player, level, currentDay, event.getPos());
+        // ゲーム中は睡眠を阻止
+        if (gameState.isGameActive()) {
+            event.setResult(Player.BedSleepingProblem.OTHER_PROBLEM);
 
-        TungSahurMod.LOGGER.debug("プレイヤー {} の睡眠を阻害: {}日目",
-                player.getName().getString(), currentDay);
+            // 恐怖演出を実行
+            executeTerrifyingSleepPrevention(player, level, gameState.getCurrentDay(), event.getPos());
+
+            TungSahurMod.LOGGER.debug("プレイヤー {} の睡眠を阻害: {}日目",
+                    player.getName().getString(), gameState.getCurrentDay());
+        }
     }
 
     /**
@@ -139,112 +149,77 @@ public class BedSleepEvent {
             player.sendSystemMessage(Component.literal(message)
                     .withStyle(ChatFormatting.RED, ChatFormatting.ITALIC));
         }
-
-        // 追加の恐怖要素（確率的）
-        if (RANDOM.nextFloat() < 0.3f) {
-            player.sendSystemMessage(Component.literal("§k§l████████")
-                    .withStyle(ChatFormatting.BLACK));
-        }
     }
 
     /**
      * 恐怖の音響効果
      */
     private static void playTerrifyingSounds(ServerPlayer player, ServerLevel level, BlockPos bedPos) {
-        // 基本的な不気味音
+        // ランダムな恐怖音を再生
+        var sounds = Arrays.asList(
+                SoundEvents.AMBIENT_CAVE,
+                SoundEvents.WITHER_AMBIENT,
+                SoundEvents.ENDERMAN_SCREAM,
+                SoundEvents.GHAST_AMBIENT,
+                SoundEvents.ZOMBIE_AMBIENT
+        );
 
+        var selectedSound = sounds.get(RANDOM.nextInt(sounds.size()));
 
-        // 追加音響効果（ランダム）
-        if (RANDOM.nextFloat() < 0.5f) {
-            level.playSound(null, bedPos, SoundEvents.WITHER_AMBIENT,
-                    SoundSource.HOSTILE, 0.3f, 1.5f);
-        }
-
-        if (RANDOM.nextFloat() < 0.3f) {
-            level.playSound(null, bedPos, SoundEvents.GHAST_SCREAM,
-                    SoundSource.HOSTILE, 0.2f, 0.8f);
-        }
-
-        // 心音のような効果
-        scheduleHeartbeatSounds(level, bedPos, 5);
-    }
-
-    /**
-     * 心音効果の遅延実行
-     */
-    private static void scheduleHeartbeatSounds(ServerLevel level, BlockPos pos, int count) {
-        if (count <= 0) return;
-
-        // 20tick後に次の心音
-        level.getServer().execute(() -> {
-            if (count > 0) {
-                level.playSound(null, pos, SoundEvents.WARDEN_HEARTBEAT,
-                        SoundSource.HOSTILE, 0.4f, 0.7f);
-
-                // 次の心音をスケジュール
-                level.getServer().tell(new net.minecraft.server.TickTask(20, () ->
-                        scheduleHeartbeatSounds(level, pos, count - 1)));
-            }
-        });
-    }
+ }
 
     /**
      * 不気味なパーティクル効果
      */
     private static void spawnOminousParticles(ServerLevel level, BlockPos bedPos, ServerPlayer player) {
-        // ベッド周辺に暗いパーティクル
+        // ベッド周囲にダークパーティクル
         for (int i = 0; i < 15; i++) {
-            double offsetX = (RANDOM.nextDouble() - 0.5) * 4.0;
-            double offsetY = RANDOM.nextDouble() * 3.0;
-            double offsetZ = (RANDOM.nextDouble() - 0.5) * 4.0;
+            double x = bedPos.getX() + 0.5 + (RANDOM.nextDouble() - 0.5) * 2.0;
+            double y = bedPos.getY() + 0.5 + RANDOM.nextDouble();
+            double z = bedPos.getZ() + 0.5 + (RANDOM.nextDouble() - 0.5) * 2.0;
 
-            level.sendParticles(ParticleTypes.SMOKE,
-                    bedPos.getX() + 0.5 + offsetX,
-                    bedPos.getY() + 1.0 + offsetY,
-                    bedPos.getZ() + 0.5 + offsetZ,
-                    1, 0.0, 0.0, 0.0, 0.02);
+            level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, x, y, z, 1,
+                    0.1, 0.1, 0.1, 0.02);
         }
 
-        // プレイヤー周辺の恐怖パーティクル
-        for (int i = 0; i < 10; i++) {
-            double angle = RANDOM.nextDouble() * Math.PI * 2;
-            double radius = 1.5 + RANDOM.nextDouble() * 2.0;
-            double x = player.getX() + Math.cos(angle) * radius;
-            double z = player.getZ() + Math.sin(angle) * radius;
+        // プレイヤー周囲に煙パーティクル
+        for (int i = 0; i < 8; i++) {
+            double x = player.getX() + (RANDOM.nextDouble() - 0.5) * 1.5;
+            double y = player.getY() + RANDOM.nextDouble() * 1.8;
+            double z = player.getZ() + (RANDOM.nextDouble() - 0.5) * 1.5;
 
-            level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                    x, player.getY() + 1.0, z,
-                    1, 0.0, 0.1, 0.0, 0.01);
+            level.sendParticles(ParticleTypes.LARGE_SMOKE, x, y, z, 1,
+                    0.0, 0.0, 0.0, 0.01);
         }
     }
 
     /**
-     * TungSahurのささやき（遅延実行）
+     * TungSahurのささやき演出をスケジュール
      */
     private static void scheduleWhisper(ServerPlayer player, ServerLevel level) {
-        // 2-5秒後にささやき
-        int delay = 40 + RANDOM.nextInt(60);
+        // 2-5秒後にささやきを実行
+        int delay = 40 + RANDOM.nextInt(80); // 2-6秒
 
-        level.getServer().tell(new net.minecraft.server.TickTask(delay, () -> {
+        level.getServer().execute(() -> {
             if (player.isAlive() && !player.isRemoved()) {
                 String whisper = TUNG_SAHUR_WHISPERS.get(RANDOM.nextInt(TUNG_SAHUR_WHISPERS.size()));
-                player.sendSystemMessage(Component.literal(whisper)
-                        .withStyle(ChatFormatting.DARK_PURPLE, ChatFormatting.OBFUSCATED));
+                player.sendSystemMessage(Component.literal(whisper));
 
-                // ささやき音
+                // ささやきと共に恐怖音
                 level.playSound(null, player.blockPosition(), SoundEvents.SOUL_ESCAPE,
-                        SoundSource.HOSTILE, 0.5f, 0.3f);
+                        SoundSource.HOSTILE, 0.3f, 0.5f);
             }
-        }));
+        });
     }
 
     /**
-     * 恐怖の環境変化
+     * 周囲の環境を不気味に変化
      */
     private static void createScaryEnvironment(ServerLevel level, BlockPos bedPos, int dayNumber) {
-        // 周囲の明かりを一時的に暗くする効果
+        // 周囲の光源を検索
         List<BlockPos> lightSources = findNearbyLightSources(level, bedPos, 8);
 
+        // 確率で光源を一時的に暗くする演出
         if (!lightSources.isEmpty() && RANDOM.nextFloat() < 0.4f) {
             // 明かりの一部を一時的に消す（演出用）
             BlockPos targetLight = lightSources.get(RANDOM.nextInt(lightSources.size()));
@@ -299,39 +274,42 @@ public class BedSleepEvent {
     }
 
     /**
-     * プレイヤーが目覚めた時（通常は発生しないが安全のため）
+     * プレイヤーが目覚めた時（ゲーム終了後のみ発生）
      */
     @SubscribeEvent
     public static void onPlayerWakeUp(PlayerWakeUpEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
 
-        // 万が一睡眠に成功した場合の処理
-        player.sendSystemMessage(Component.literal("§l悪夢から目覚めた...")
-                .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD));
-
-        // 目覚め時の恐怖演出
         ServerLevel level = player.serverLevel();
-        spawnWakeUpHorror(level, player);
+        GameStateManager gameState = GameStateManager.get(level);
 
-        TungSahurMod.LOGGER.debug("プレイヤー {} が予期しない目覚め", player.getName().getString());
+        if (gameState.isGameEnded()) {
+            // ゲーム終了後の平和な目覚め
+            player.sendSystemMessage(Component.literal("§a久しぶりに安らかな朝を迎えることができた...")
+                    .withStyle(ChatFormatting.GREEN, ChatFormatting.ITALIC));
+
+            // 平和なパーティクル効果
+            spawnPeacefulWakeUpEffects(level, player);
+        }
+
+        TungSahurMod.LOGGER.debug("プレイヤー {} が目覚め", player.getName().getString());
     }
 
     /**
-     * 目覚め時の恐怖演出
+     * 平和な目覚め時の演出
      */
-    private static void spawnWakeUpHorror(ServerLevel level, ServerPlayer player) {
-        // 激しい恐怖パーティクル
-        for (int i = 0; i < 30; i++) {
-            level.sendParticles(ParticleTypes.SOUL,
-                    player.getX() + (RANDOM.nextDouble() - 0.5) * 3.0,
+    private static void spawnPeacefulWakeUpEffects(ServerLevel level, ServerPlayer player) {
+        // 美しいパーティクル効果
+        for (int i = 0; i < 20; i++) {
+            level.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                    player.getX() + (RANDOM.nextDouble() - 0.5) * 2.0,
                     player.getY() + RANDOM.nextDouble() * 2.0,
-                    player.getZ() + (RANDOM.nextDouble() - 0.5) * 3.0,
+                    player.getZ() + (RANDOM.nextDouble() - 0.5) * 2.0,
                     1, 0.0, 0.1, 0.0, 0.1);
         }
 
-        // 恐怖音
-        level.playSound(null, player.blockPosition(), SoundEvents.WITHER_DEATH,
-                SoundSource.HOSTILE, 0.5f, 1.5f);
+
+
     }
 
     // === デバッグ・ユーティリティメソッド ===

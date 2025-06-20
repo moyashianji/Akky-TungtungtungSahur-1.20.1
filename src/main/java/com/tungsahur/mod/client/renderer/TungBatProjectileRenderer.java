@@ -89,10 +89,7 @@ public class TungBatProjectileRenderer extends EntityRenderer<TungBatProjectile>
             spawnClientTrailParticles(entity);
         }
 
-        // デバッグ情報の表示
-        if (TungSahurMod.isDebugMode() && entity.tickCount % 20 == 0) {
-            logRenderDebugInfo(entity);
-        }
+
 
         super.render(entity, entityYaw, partialTick, poseStack, buffer, packedLight);
     }

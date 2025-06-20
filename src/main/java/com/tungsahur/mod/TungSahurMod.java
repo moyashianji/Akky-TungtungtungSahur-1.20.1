@@ -1,4 +1,5 @@
-package com.tungsahur.mod;
+
+        package com.tungsahur.mod;
 
 import com.mojang.logging.LogUtils;
 import com.tungsahur.mod.commands.TungSahurCommands;
@@ -8,6 +9,7 @@ import com.tungsahur.mod.events.BedSleepEvent;
 import com.tungsahur.mod.events.DayCounterEvents;
 import com.tungsahur.mod.items.ModItems;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
+import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.Mob;
@@ -77,135 +79,92 @@ public class TungSahurMod {
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("Tung Tung Tung Sahur Mod - 恐怖の始まり...");
+        LOGGER.info("新しいゲームフローシステムが初期化されました");
 
-
-
+        // 新しいゲームシステムの初期化ログ
+        LOGGER.info("=== ゲームシステム概要 ===");
+        LOGGER.info("- /tungsahur start: ゲーム開始");
+        LOGGER.info("- /tungsahur reset: ゲームリセット");
+        LOGGER.info("- ゲーム中は睡眠不可、3日目の夜終了後に睡眠可能");
+        LOGGER.info("========================");
     }
 
-
     private void addCreative(BuildCreativeModeTabContentsEvent event) {
+        if (event.getTabKey() == CreativeModeTabs.COMBAT) {
+            event.accept(ModItems.TUNG_SAHUR_BAT);
+        }
         if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
             event.accept(ModItems.TUNG_SAHUR_SPAWN_EGG);
         }
     }
 
-    @SubscribeEvent
-    public void registerAttributes(EntityAttributeCreationEvent event) {
+    private void registerAttributes(EntityAttributeCreationEvent event) {
         event.put(ModEntities.TUNG_SAHUR.get(), TungSahurEntity.createAttributes().build());
     }
 
-    @SubscribeEvent
-    public void registerSpawnPlacements(SpawnPlacementRegisterEvent event) {
-        // 1つの設定で手動スポーンと自然スポーンの両方を処理
+    private void registerSpawnPlacements(SpawnPlacementRegisterEvent event) {
         event.register(ModEntities.TUNG_SAHUR.get(),
                 SpawnPlacements.Type.ON_GROUND,
                 Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                (entityType, world, reason, pos, random) -> {
-                    // 手動スポーン（コマンドやスポーンエッグ）の場合
-                    if (reason == MobSpawnType.COMMAND || reason == MobSpawnType.SPAWN_EGG) {
-                        // 既存の条件を使用
-                        return TungSahurEntity.checkTungSahurSpawnRules(entityType, world, reason, pos, random);
-                    }
-
-                    // 自然スポーンの場合
-                    if (reason == MobSpawnType.NATURAL) {
-                        // 平和モード以外でのみスポーン
-                        if (world.getDifficulty() == Difficulty.PEACEFUL) return false;
-
-                        // 夜間のみスポーン
-                        if (world.getLevel().isDay()) return false;
-
-                        // 暗い場所でのみスポーン（ゾンビと同じ条件）
-                        boolean darkEnough = Monster.isDarkEnoughToSpawn(world, pos, random);
-
-                        // 基本的なモブスポーン条件
-                        boolean basicRules = Mob.checkMobSpawnRules(entityType, world, reason, pos, random);
-
-                        return darkEnough && basicRules;
-                    }
-
-                    // その他のスポーン理由の場合は既存の条件
-                    return TungSahurEntity.checkTungSahurSpawnRules(entityType, world, reason, pos, random);
-                },
-                SpawnPlacementRegisterEvent.Operation.REPLACE); // REPLACEのみ使用
-
-        TungSahurMod.LOGGER.info("TungSahur統合スポーン設定登録完了");
+                Monster::checkMonsterSpawnRules,
+                SpawnPlacementRegisterEvent.Operation.REPLACE);
     }
+
+    /**
+     * コマンド登録
+     */
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         TungSahurCommands.register(event.getDispatcher());
+        LOGGER.info("TungSahurコマンドが登録されました");
     }
 
-    @Mod.EventBusSubscriber(modid = MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
+    // クライアント専用イベント
+    @Mod.EventBusSubscriber(modid = MODID, value = Dist.CLIENT)
     public static class ClientModEvents {
         @SubscribeEvent
         public static void onClientSetup(FMLClientSetupEvent event) {
-            LOGGER.info("Tung Sahur クライアントセットアップ完了");
+            LOGGER.info("Tung Sahur Mod クライアント初期化完了");
         }
     }
 
+    // === 新しいゲームシステム用のユーティリティメソッド ===
+
     /**
-     * デバッグモードの状態を確認するメソッド
-     * 開発環境やシステムプロパティで制御可能
+     * ゲーム状態の初期化（サーバー起動時）
      */
-    public static boolean isDebugMode() {
-        // システムプロパティでデバッグモードを制御
-        String debugProperty = System.getProperty("tungsahur.debug");
-        if ("true".equals(debugProperty)) {
-            return true;
-        }
+    public static void initializeGameSystems() {
+        LOGGER.info("ゲームシステムを初期化中...");
 
-        // 開発環境の場合はデバッグモード
-        boolean isDevelopment = !net.minecraftforge.fml.loading.FMLEnvironment.production;
-        if (isDevelopment) {
-            return true;
-        }
+        // イベントシステムのリセット
+        DayCounterEvents.resetGameState();
 
-        // ログレベルがDEBUG以下の場合
-        try {
-            org.apache.logging.log4j.Level currentLevel = ((org.apache.logging.log4j.core.Logger) LOGGER).getLevel();
-            if (currentLevel != null && currentLevel.isLessSpecificThan(org.apache.logging.log4j.Level.DEBUG)) {
-                return true;
-            }
-        } catch (Exception e) {
-            // ログレベル取得に失敗した場合は無視
-        }
-
-        return false;
+        LOGGER.info("ゲームシステム初期化完了");
     }
 
     /**
-     * デバッグモードを強制的に有効/無効にするメソッド（開発時用）
+     * デバッグ情報の取得
      */
-    public static void setDebugMode(boolean enabled) {
-        System.setProperty("tungsahur.debug", String.valueOf(enabled));
-        LOGGER.info("TungSahur デバッグモード: {}", enabled ? "有効" : "無効");
+    public static void logDebugInfo() {
+        LOGGER.info("=== TungSahur Mod デバッグ情報 ===");
+        LOGGER.info("Mod ID: {}", MODID);
+        LOGGER.info("Day Counter Events: {}", DayCounterEvents.getDebugInfo());
+        LOGGER.info("Bed Sleep Event: システム正常動作中");
+        LOGGER.info("===========================");
     }
 
     /**
-     * デバッグ情報を出力するメソッド
+     * モッドの完全リセット（開発・デバッグ用）
      */
-    public static void logDebugInfo(String message, Object... args) {
-        if (isDebugMode()) {
-            LOGGER.debug("[DEBUG] " + message, args);
-        }
-    }
+    public static void performCompleteReset() {
+        LOGGER.warn("完全リセットを実行中...");
 
-    /**
-     * 警告レベルのデバッグ情報を出力するメソッド
-     */
-    public static void logDebugWarn(String message, Object... args) {
-        if (isDebugMode()) {
-            LOGGER.warn("[DEBUG-WARN] " + message, args);
-        }
-    }
+        // イベントシステムのリセット
+        DayCounterEvents.resetGameState();
 
-    /**
-     * エラーレベルのデバッグ情報を出力するメソッド
-     */
-    public static void logDebugError(String message, Throwable throwable) {
-        if (isDebugMode()) {
-            LOGGER.error("[DEBUG-ERROR] " + message, throwable);
-        }
+        // 睡眠システムの統計をリセット
+        BedSleepEvent.logSleepPreventionStatistics();
+
+        LOGGER.info("完全リセット完了");
     }
 }

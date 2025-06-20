@@ -1,21 +1,20 @@
-// DayCounterEvents.java - 完全対応版
+// DayCounterEvents.java - 新しいゲームフロー対応版
 package com.tungsahur.mod.events;
 
 import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
+import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
-import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -27,107 +26,59 @@ import java.util.UUID;
 @Mod.EventBusSubscriber(modid = TungSahurMod.MODID)
 public class DayCounterEvents {
 
-    // 各プレイヤーの最後の通知時間を記録
+    // プレイヤー管理用
     private static final Map<UUID, Long> lastNotificationTime = new HashMap<>();
     private static final Map<UUID, Integer> lastKnownDay = new HashMap<>();
+    private static final long NOTIFICATION_COOLDOWN = 100; // 5秒のクールダウン
 
-    // 自動進行設定
-    private static final int DAY_PROGRESSION_INTERVAL = 1200; // 1分（1200tick）ごとに確認
-    private static final long NOTIFICATION_COOLDOWN = 6000; // 5分のクールダウン
-
-    private static int tickCounter = 0;
-    private static int lastGlobalDay = -1;
+    // グローバル状態管理
+    private static int lastGlobalDay = 0;
+    private static boolean gameEndNotificationSent = false;
 
     /**
-     * ワールド読み込み時の初期化
-     */
-    @SubscribeEvent
-    public static void onLevelLoad(LevelEvent.Load event) {
-        if (event.getLevel() instanceof ServerLevel serverLevel) {
-            DayCountSavedData dayData = DayCountSavedData.get(serverLevel);
-            dayData.updateDayCount(serverLevel);
-
-            int currentDay = dayData.getDayCount();
-            lastGlobalDay = currentDay;
-
-            TungSahurMod.LOGGER.info("DayCounterEvents初期化: 現在{}日目", currentDay);
-
-            // 既存のTungSahurエンティティを更新
-            updateAllTungSahurEntities(serverLevel, currentDay);
-        }
-    }
-
-    /**
-     * サーバーティック処理 - 自動日数進行
+     * サーバーティック処理 - ゲーム状態とゲーム進行の監視
      */
     @SubscribeEvent
     public static void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
 
-        tickCounter++;
+        MinecraftServer server = event.getServer();
+        if (server == null) return;
 
-        // 定期的な日数確認と更新
-        if (tickCounter % DAY_PROGRESSION_INTERVAL == 0) {
-            checkAndUpdateDayProgression(event.getServer().getAllLevels());
-        }
-
-        // TungSahurエンティティの定期更新
-        if (tickCounter % 100 == 0) { // 5秒ごと
-            updateTungSahurEntitiesRegularly(event.getServer().getAllLevels());
+        // 全ワールドのゲーム状態をチェック
+        for (ServerLevel level : server.getAllLevels()) {
+            checkGameProgression(level);
         }
     }
 
     /**
-     * プレイヤーログイン時の通知
+     * ゲーム進行の確認と更新
      */
-    @SubscribeEvent
-    public static void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
-        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+    private static void checkGameProgression(ServerLevel level) {
+        GameStateManager gameState = GameStateManager.get(level);
 
-        ServerLevel level = player.serverLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
-        int currentDay = dayData.getDayCount();
+        if (!gameState.isGameStarted()) return;
 
-        // プレイヤーに現在の日数を通知
-        schedulePlayerNotification(player, currentDay, 60); // 3秒後に通知
+        // ゲーム進行をチェック
+        gameState.checkNightProgression(level);
 
-        // プレイヤーの記録を更新
-        lastKnownDay.put(player.getUUID(), currentDay);
+        // 日数変更の検出
+        int currentDay = gameState.getCurrentDay();
+        if (currentDay != lastGlobalDay && currentDay > 0) {
+            handleDayProgression(level, lastGlobalDay, currentDay);
+            lastGlobalDay = currentDay;
+        }
 
-        TungSahurMod.LOGGER.debug("プレイヤー {} がログイン: {}日目", player.getName().getString(), currentDay);
-    }
+        // ゲーム終了の検出
+        if (gameState.isGameEnded() && !gameEndNotificationSent) {
+            handleGameEnd(level);
+            gameEndNotificationSent = true;
+        }
 
-    /**
-     * プレイヤーログアウト時のクリーンアップ
-     */
-    @SubscribeEvent
-    public static void onPlayerLogout(PlayerEvent.PlayerLoggedOutEvent event) {
-        UUID playerUUID = event.getEntity().getUUID();
-        lastNotificationTime.remove(playerUUID);
-        lastKnownDay.remove(playerUUID);
-
-        TungSahurMod.LOGGER.debug("プレイヤー {} の記録をクリーンアップ", event.getEntity().getName().getString());
-    }
-
-    // === 内部メソッド ===
-
-    /**
-     * 日数進行の確認と更新
-     */
-    private static void checkAndUpdateDayProgression(Iterable<ServerLevel> levels) {
-        for (ServerLevel level : levels) {
-            DayCountSavedData dayData = DayCountSavedData.get(level);
-            int oldDay = dayData.getDayCount();
-
-            // 日数更新
-            dayData.updateDayCount(level);
-            int newDay = dayData.getDayCount();
-
-            // 日数が変わった場合の処理
-            if (newDay != oldDay || newDay != lastGlobalDay) {
-                handleDayProgression(level, oldDay, newDay);
-                lastGlobalDay = newDay;
-            }
+        // ゲームがリセットされた場合
+        if (!gameState.isGameStarted() && gameEndNotificationSent) {
+            gameEndNotificationSent = false;
+            lastGlobalDay = 0;
         }
     }
 
@@ -145,8 +96,33 @@ public class DayCounterEvents {
 
         // 日数変更時の特殊効果
         triggerDayChangeEffects(level, newDay);
+    }
 
-        // 管理者への詳細ログ
+    /**
+     * ゲーム終了時の処理
+     */
+    private static void handleGameEnd(ServerLevel level) {
+        TungSahurMod.LOGGER.info("ゲーム終了: 3日間の恐怖が終了");
+
+        // 全プレイヤーにゲーム終了を通知
+        Component endMessage = Component.literal("§l=== ゲーム終了 ===")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                .append("\n")
+                .append(Component.literal("3日間の恐怖がついに終わりました...")
+                        .withStyle(ChatFormatting.GREEN))
+                .append("\n")
+                .append(Component.literal("これで安らかに眠ることができます。")
+                        .withStyle(ChatFormatting.GRAY));
+
+        for (ServerPlayer player : level.getPlayers(p -> true)) {
+            player.sendSystemMessage(endMessage);
+
+            // 平和な演出
+            spawnPeacefulEffects(level, player);
+        }
+
+        // 全TungSahurエンティティを削除（平和になったため）
+        removeAllTungSahurEntities(level);
     }
 
     /**
@@ -206,243 +182,229 @@ public class DayCounterEvents {
             default -> Component.literal("暗闇が深まっている...").withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC);
         };
 
-        player.sendSystemMessage(fearMessage);
-
-        // 警告メッセージ
-        Component warningMessage = Component.literal("夜は危険です。十分に注意してください。").withStyle(ChatFormatting.RED);
-        player.sendSystemMessage(warningMessage);
-
-
-
-
-
-
-        // パーティクル効果
-        spawnNotificationParticles(player, dayNumber);
-
-        TungSahurMod.LOGGER.info("プレイヤー {} に{}日目の夜通知を送信", player.getName().getString(), dayNumber);
-    }
-
-
-
-
-
-    /**
-     * 通知パーティクルの生成
-     */
-    private static void spawnNotificationParticles(ServerPlayer player, int dayNumber) {
-        ServerLevel level = player.serverLevel();
-        double x = player.getX();
-        double y = player.getY() + 1.5;
-        double z = player.getZ();
-
-        switch (dayNumber) {
-            case 1:
-                level.sendParticles(ParticleTypes.SMOKE, x, y, z, 10, 0.5, 0.5, 0.5, 0.02);
-                break;
-            case 2:
-                level.sendParticles(ParticleTypes.FLAME, x, y, z, 15, 0.8, 0.5, 0.8, 0.05);
-                level.sendParticles(ParticleTypes.SMOKE, x, y, z, 5, 0.3, 0.3, 0.3, 0.02);
-                break;
-            case 3:
-                level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, x, y, z, 20, 1.0, 0.8, 1.0, 0.08);
-                level.sendParticles(ParticleTypes.WITCH, x, y, z, 8, 0.5, 0.5, 0.5, 0.03);
-                break;
-        }
-    }
-
-    /**
-     * 全TungSahurエンティティの更新
-     */
-    private static void updateAllTungSahurEntities(ServerLevel level, int dayNumber) {
-        // ワールド境界内の全エンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        int updatedCount = 0;
-        for (TungSahurEntity entity : entities) {
-            if (entity.getDayNumber() != dayNumber) {
-                entity.setDayNumber(dayNumber);
-                updatedCount++;
-            }
-        }
-
-        if (updatedCount > 0) {
-            TungSahurMod.LOGGER.info("{}体のTungSahurエンティティを{}日目に更新", updatedCount, dayNumber);
-        }
-    }
-
-    /**
-     * TungSahurエンティティの定期更新
-     */
-    private static void updateTungSahurEntitiesRegularly(Iterable<ServerLevel> levels) {
-        for (ServerLevel level : levels) {
-            DayCountSavedData dayData = DayCountSavedData.get(level);
-            int currentDay = dayData.getDayCount();
-
-            // ワールド境界内の全エンティティを取得
-            net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-            net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                    worldBorder.getMinX(),
-                    level.getMinBuildHeight(),
-                    worldBorder.getMinZ(),
-                    worldBorder.getMaxX(),
-                    level.getMaxBuildHeight(),
-                    worldBorder.getMaxZ()
-            );
-
-            List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-            for (TungSahurEntity entity : entities) {
-                // 日数の同期確認
-                if (entity.getDayNumber() != currentDay) {
-                    entity.setDayNumber(currentDay);
-                    TungSahurMod.LOGGER.debug("TungSahurエンティティの日数を{}に同期", currentDay);
-                }
-            }
-        }
+        // 少し遅延して恐怖メッセージを送信
+        schedulePlayerNotification(player, fearMessage, 40); // 2秒後
     }
 
     /**
      * 日数変更時の特殊効果
      */
     private static void triggerDayChangeEffects(ServerLevel level, int dayNumber) {
-        // 全プレイヤー周辺での環境効果
         for (ServerPlayer player : level.getPlayers(p -> true)) {
-            spawnEnvironmentalEffects(level, player, dayNumber);
-        }
+            // 恐怖度に応じたパーティクル効果
+            spawnDayChangeParticles(level, player, dayNumber);
 
-        // ワールド境界内のTungSahurエンティティ周辺での効果
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        for (TungSahurEntity entity : entities) {
-            spawnEntityEvolutionEffects(level, entity, dayNumber);
+            // 恐怖度に応じた音響効果
+            playDayChangeSounds(level, player, dayNumber);
         }
     }
 
     /**
-     * 環境効果の生成
+     * 日数変更時のパーティクル効果
      */
-    private static void spawnEnvironmentalEffects(ServerLevel level, ServerPlayer player, int dayNumber) {
-        double x = player.getX();
-        double y = player.getY();
-        double z = player.getZ();
-
-        // 日数に応じた広範囲効果
-        int radius = 10 + (dayNumber * 5);
-        int particleCount = 20 + (dayNumber * 10);
+    private static void spawnDayChangeParticles(ServerLevel level, ServerPlayer player, int dayNumber) {
+        int particleCount = dayNumber * 10; // 日数が増えるほど多くのパーティクル
 
         for (int i = 0; i < particleCount; i++) {
-            double offsetX = (player.getRandom().nextDouble() - 0.5) * radius;
-            double offsetZ = (player.getRandom().nextDouble() - 0.5) * radius;
-            double offsetY = player.getRandom().nextDouble() * 3.0;
+            double x = player.getX() + (level.random.nextDouble() - 0.5) * (dayNumber * 2.0);
+            double y = player.getY() + level.random.nextDouble() * 2.0;
+            double z = player.getZ() + (level.random.nextDouble() - 0.5) * (dayNumber * 2.0);
 
-            switch (dayNumber) {
-                case 1:
-                    level.sendParticles(ParticleTypes.SMOKE,
-                            x + offsetX, y + offsetY, z + offsetZ,
-                            1, 0.1, 0.1, 0.1, 0.01);
-                    break;
-                case 2:
-                    level.sendParticles(ParticleTypes.FLAME,
-                            x + offsetX, y + offsetY, z + offsetZ,
-                            1, 0.1, 0.1, 0.1, 0.02);
-                    break;
-                case 3:
-                    level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                            x + offsetX, y + offsetY, z + offsetZ,
-                            1, 0.1, 0.1, 0.1, 0.03);
-                    break;
-            }
+            var particleType = switch (dayNumber) {
+                case 1 -> ParticleTypes.SMOKE;
+                case 2 -> ParticleTypes.LARGE_SMOKE;
+                case 3 -> ParticleTypes.SOUL_FIRE_FLAME;
+                default -> ParticleTypes.SMOKE;
+            };
+
+            level.sendParticles(particleType, x, y, z, 1, 0.1, 0.1, 0.1, 0.02);
         }
     }
 
     /**
-     * エンティティ進化効果の生成
+     * 日数変更時の音響効果
      */
-    private static void spawnEntityEvolutionEffects(ServerLevel level, TungSahurEntity entity, int dayNumber) {
-        double x = entity.getX();
-        double y = entity.getY() + entity.getBbHeight() * 0.5;
-        double z = entity.getZ();
+    private static void playDayChangeSounds(ServerLevel level, ServerPlayer player, int dayNumber) {
+        var sound = switch (dayNumber) {
+            case 1 -> SoundEvents.AMBIENT_CAVE;
+            case 2 -> SoundEvents.WITHER_AMBIENT;
+            case 3 -> SoundEvents.WITHER_SPAWN;
+            default -> SoundEvents.AMBIENT_CAVE;
+        };
 
-        // 進化パーティクル
-        level.sendParticles(ParticleTypes.SOUL,
-                x, y, z, 30, 0.8, 0.8, 0.8, 0.1);
+        float volume = 0.3f + (dayNumber * 0.2f); // 日数が増えるほど音量アップ
+        float pitch = 1.0f - (dayNumber * 0.1f); // 日数が増えるほど低音に
 
-        level.sendParticles(ParticleTypes.ENCHANTED_HIT,
-                x, y, z, 20, 0.5, 0.5, 0.5, 0.08);
 
-        // 進化音
-        level.playSound(null, x, y, z,
-                SoundEvents.ENDER_DRAGON_GROWL, SoundSource.HOSTILE,
-                1.0F, 0.8F + (dayNumber * 0.1F));
     }
 
     /**
-     * プレイヤー通知のスケジュール
+     * TungSahurエンティティの更新
      */
-    private static void schedulePlayerNotification(ServerPlayer player, int dayNumber, int delayTicks) {
-        // 指定したティック後に通知を送信
-        player.server.execute(() -> {
-            player.server.tell(new net.minecraft.server.TickTask(
-                    player.server.getTickCount() + delayTicks,
-                    () -> {
-                        if (player.isAlive() && player.serverLevel() != null) {
-                            Component message = createDayMessage(dayNumber);
-                            sendDayNotificationToPlayer(player, message, dayNumber);
-                        }
-                    }
-            ));
-        });
+    private static void updateAllTungSahurEntities(ServerLevel level, int dayNumber) {
+        var worldBorder = level.getWorldBorder();
+        var searchArea = new net.minecraft.world.phys.AABB(
+                worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
+                worldBorder.getMaxX(), level.getMaxBuildHeight(), worldBorder.getMaxZ()
+        );
+
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, searchArea);
+
+        for (TungSahurEntity entity : entities) {
+            entity.setDayNumber(dayNumber);
+        }
+
+        TungSahurMod.LOGGER.info("{}体のTungSahurエンティティを{}日目に更新", entities.size(), dayNumber);
     }
 
+    /**
+     * 全TungSahurエンティティを削除
+     */
+    private static void removeAllTungSahurEntities(ServerLevel level) {
+        var worldBorder = level.getWorldBorder();
+        var searchArea = new net.minecraft.world.phys.AABB(
+                worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
+                worldBorder.getMaxX(), level.getMaxBuildHeight(), worldBorder.getMaxZ()
+        );
 
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, searchArea);
+
+        for (TungSahurEntity entity : entities) {
+            // 平和な消失演出
+            for (int i = 0; i < 10; i++) {
+                level.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                        entity.getX() + (level.random.nextDouble() - 0.5) * 2.0,
+                        entity.getY() + level.random.nextDouble() * 1.5,
+                        entity.getZ() + (level.random.nextDouble() - 0.5) * 2.0,
+                        1, 0.0, 0.1, 0.0, 0.1);
+            }
+            entity.discard();
+        }
+
+        TungSahurMod.LOGGER.info("{}体のTungSahurエンティティが平和に消失", entities.size());
+    }
+
+    /**
+     * 平和な演出
+     */
+    private static void spawnPeacefulEffects(ServerLevel level, ServerPlayer player) {
+        // 美しいパーティクル効果
+        for (int i = 0; i < 30; i++) {
+            level.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                    player.getX() + (level.random.nextDouble() - 0.5) * 5.0,
+                    player.getY() + level.random.nextDouble() * 3.0,
+                    player.getZ() + (level.random.nextDouble() - 0.5) * 5.0,
+                    1, 0.0, 0.1, 0.0, 0.1);
+        }
+
+
+
+    }
+
+    /**
+     * プレイヤー通知のスケジューリング
+     */
+    private static void schedulePlayerNotification(ServerPlayer player, Component message, int delayTicks) {
+        var server = player.getServer();
+        if (server != null) {
+            server.execute(() -> {
+                // 指定されたtick数後に実行
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(delayTicks * 50); // 1tick = 50ms
+                        if (player.isAlive() && !player.isRemoved()) {
+                            player.sendSystemMessage(message);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }).start();
+            });
+        }
+    }
+
+    /**
+     * プレイヤー通知のスケジューリング（遅延版）
+     */
+    private static void schedulePlayerNotification(ServerPlayer player, int dayNumber, int delayTicks) {
+        Component message = Component.literal("現在: " + dayNumber + "日目")
+                .withStyle(dayNumber == 1 ? ChatFormatting.YELLOW :
+                        dayNumber == 2 ? ChatFormatting.GOLD : ChatFormatting.DARK_RED);
+
+        schedulePlayerNotification(player, message, delayTicks);
+    }
+
+    /**
+     * プレイヤーログイン時の処理
+     */
+    @SubscribeEvent
+    public static void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+
+        ServerLevel level = player.serverLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+
+        if (!gameState.isGameStarted()) return;
+
+        int currentDay = gameState.getCurrentDay();
+
+        // ゲーム状態の通知
+        Component statusMessage;
+        if (gameState.isGameEnded()) {
+            statusMessage = Component.literal("§aゲームは終了しています。安らかに眠ることができます。")
+                    .withStyle(ChatFormatting.GREEN);
+        } else if (currentDay > 0) {
+            statusMessage = Component.literal("§cゲーム進行中: " + currentDay + "日目の夜")
+                    .withStyle(ChatFormatting.RED)
+                    .append("\n")
+                    .append(Component.literal("§7眠ることはできません。")
+                            .withStyle(ChatFormatting.GRAY));
+        } else {
+            statusMessage = Component.literal("§eゲーム開始済み: 夜になると1日目が始まります")
+                    .withStyle(ChatFormatting.YELLOW);
+        }
+
+        // 遅延して通知
+        schedulePlayerNotification(player, statusMessage, 60); // 3秒後
+
+        // プレイヤーの記録を更新
+        lastKnownDay.put(player.getUUID(), currentDay);
+
+        TungSahurMod.LOGGER.debug("プレイヤー {} がログイン: ゲーム状態={}",
+                player.getName().getString(), gameState.getGameStatus());
+    }
+
+    /**
+     * プレイヤーログアウト時のクリーンアップ
+     */
+    @SubscribeEvent
+    public static void onPlayerLogout(PlayerEvent.PlayerLoggedOutEvent event) {
+        UUID playerUUID = event.getEntity().getUUID();
+        lastNotificationTime.remove(playerUUID);
+        lastKnownDay.remove(playerUUID);
+
+        TungSahurMod.LOGGER.debug("プレイヤー {} の記録をクリーンアップ", event.getEntity().getName().getString());
+    }
 
     // === ユーティリティメソッド ===
 
     /**
-     * プレイヤーの最後の既知日数を取得
+     * ゲーム状態のリセット（外部からの呼び出し用）
      */
-    public static int getPlayerLastKnownDay(Player player) {
-        return lastKnownDay.getOrDefault(player.getUUID(), 1);
+    public static void resetGameState() {
+        lastGlobalDay = 0;
+        gameEndNotificationSent = false;
+        lastNotificationTime.clear();
+        lastKnownDay.clear();
+
+        TungSahurMod.LOGGER.info("DayCounterEventsの状態をリセット");
     }
 
     /**
-     * プレイヤーの通知クールダウン確認
+     * デバッグ情報の取得
      */
-    public static boolean isPlayerNotificationOnCooldown(Player player, long currentTime) {
-        UUID uuid = player.getUUID();
-        return lastNotificationTime.containsKey(uuid) &&
-                currentTime - lastNotificationTime.get(uuid) < NOTIFICATION_COOLDOWN;
-    }
-
-    /**
-     * 統計情報の取得
-     */
-    public static void logEventStatistics() {
-        TungSahurMod.LOGGER.info("=== DayCounterEvents統計 ===");
-        TungSahurMod.LOGGER.info("追跡中プレイヤー数: {}", lastKnownDay.size());
-        TungSahurMod.LOGGER.info("最後のグローバル日数: {}", lastGlobalDay);
-        TungSahurMod.LOGGER.info("総ティック数: {}", tickCounter);
-        TungSahurMod.LOGGER.info("===========================");
+    public static String getDebugInfo() {
+        return String.format("DayCounterEvents状態: lastGlobalDay=%d, gameEndNotificationSent=%s, trackedPlayers=%d",
+                lastGlobalDay, gameEndNotificationSent, lastKnownDay.size());
     }
 }

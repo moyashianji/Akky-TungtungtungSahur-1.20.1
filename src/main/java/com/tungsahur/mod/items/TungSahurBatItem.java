@@ -101,10 +101,7 @@ public class TungSahurBatItem extends Item {
                 addNormalBatTooltip(tooltipComponents, tag, level);
             }
 
-            // デバッグ情報
-            if (TungSahurMod.isDebugMode() && isAdvanced.isAdvanced()) {
-                addDebugTooltip(tooltipComponents, tag);
-            }
+
         } else {
             tooltipComponents.add(Component.literal("不気味なバット...").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
         }

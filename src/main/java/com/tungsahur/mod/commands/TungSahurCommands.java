@@ -1,4 +1,4 @@
-// TungSahurCommands.java - 完全対応版
+// TungSahurCommands.java - 新しいゲームフロー対応版
 package com.tungsahur.mod.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
@@ -14,6 +14,7 @@ import com.tungsahur.mod.events.DayCounterEvents;
 import com.tungsahur.mod.items.ModItems;
 import com.tungsahur.mod.items.TungSahurBatItem;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
+import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -30,6 +31,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -43,16 +45,19 @@ public class TungSahurCommands {
                 Commands.literal("tungsahur")
                         .requires(source -> source.hasPermission(2)) // OP権限が必要
 
-                        // 基本コマンド
+                        // /tungsahur start - ゲーム開始
+                        .then(Commands.literal("start")
+                                .executes(TungSahurCommands::startGame))
+
+                        // /tungsahur reset - ゲームリセット
+                        .then(Commands.literal("reset")
+                                .executes(TungSahurCommands::resetGame))
+
+                        // 既存のコマンドも維持
                         .then(Commands.literal("status")
                                 .executes(TungSahurCommands::getStatus))
 
-                        .then(Commands.literal("debug")
-                                .executes(TungSahurCommands::getDebugInfo)
-                                .then(Commands.argument("enabled", BoolArgumentType.bool())
-                                        .executes(context -> setDebugMode(context, BoolArgumentType.getBool(context, "enabled")))))
-
-                        // 日数管理
+                        // 日数管理コマンド（デバッグ用）
                         .then(Commands.literal("day")
                                 .then(Commands.literal("get")
                                         .executes(TungSahurCommands::getCurrentDay))
@@ -64,154 +69,219 @@ public class TungSahurCommands {
                                 .then(Commands.literal("advance")
                                         .executes(TungSahurCommands::advanceDay)))
 
-                        // エンティティ管理
+                        // エンティティ管理コマンド
                         .then(Commands.literal("entity")
+                                .then(Commands.literal("spawn")
+                                        .then(Commands.argument("pos", Vec3Argument.vec3())
+                                                .executes(context -> spawnEntity(context, Vec3Argument.getVec3(context, "pos"))))
+                                        .executes(TungSahurCommands::spawnEntityAtPlayer))
+                                .then(Commands.literal("clear")
+                                        .executes(TungSahurCommands::clearAllEntities))
                                 .then(Commands.literal("count")
                                         .executes(TungSahurCommands::countEntities))
-                                .then(Commands.literal("list")
-                                        .executes(TungSahurCommands::listEntities))
-                                .then(Commands.literal("spawn")
-                                        .then(Commands.argument("position", Vec3Argument.vec3())
-                                                .executes(context -> spawnEntity(context, Vec3Argument.getVec3(context, "position")))
-                                                .then(Commands.argument("day", IntegerArgumentType.integer(1, 3))
-                                                        .executes(context -> spawnEntityWithDay(context,
-                                                                Vec3Argument.getVec3(context, "position"),
-                                                                IntegerArgumentType.getInteger(context, "day"))))))
-                                .then(Commands.literal("remove")
-                                        .then(Commands.literal("all")
-                                                .executes(TungSahurCommands::removeAllEntities))
-                                        .then(Commands.literal("nearest")
-                                                .executes(TungSahurCommands::removeNearestEntity)))
                                 .then(Commands.literal("update")
-                                        .then(Commands.literal("all")
-                                                .executes(TungSahurCommands::updateAllEntities))
-                                        .then(Commands.argument("targets", EntityArgument.entities())
-                                                .executes(context -> updateSpecificEntities(context, EntityArgument.getEntities(context, "targets"))))))
+                                        .executes(TungSahurCommands::updateAllEntities)))
 
-                        // アイテム管理
-                        .then(Commands.literal("item")
-                                .then(Commands.literal("give")
-                                        .then(Commands.literal("bat")
-                                                .executes(TungSahurCommands::giveBat)
-                                                .then(Commands.argument("day", IntegerArgumentType.integer(1, 3))
-                                                        .executes(context -> giveBatWithDay(context, IntegerArgumentType.getInteger(context, "day")))))
-                                        .then(Commands.literal("entity_bat")
-                                                .then(Commands.argument("day", IntegerArgumentType.integer(1, 3))
-                                                        .executes(context -> giveEntityBat(context, IntegerArgumentType.getInteger(context, "day"))))))
+                        // アイテム関連コマンド
+                        .then(Commands.literal("give")
+                                .then(Commands.literal("bat")
+                                        .executes(TungSahurCommands::giveBat)
+                                        .then(Commands.argument("day", IntegerArgumentType.integer(1, 3))
+                                                .executes(context -> giveEntityBat(context, IntegerArgumentType.getInteger(context, "day")))))
+                                .then(Commands.literal("spawnegg")
+                                        .executes(TungSahurCommands::giveSpawnEgg)))
 
-                                // 統計・分析
-                                .then(Commands.literal("stats")
-                                        .executes(TungSahurCommands::getStatistics)
-                                        .then(Commands.literal("events")
-                                                .executes(TungSahurCommands::getEventStatistics))
-                                        )
+                        // 統計・分析コマンド
+                        .then(Commands.literal("stats")
+                                .executes(TungSahurCommands::getStatistics))
 
-                                // テスト・デバッグ
-                                .then(Commands.literal("test")
-                                        .then(Commands.literal("nightmare")
-                                                .executes(TungSahurCommands::testNightmare))
-                                        .then(Commands.literal("effects")
-                                                .then(Commands.argument("day", IntegerArgumentType.integer(1, 3))
-                                                        .executes(context -> testDayEffects(context, IntegerArgumentType.getInteger(context, "day")))))
-                                        .then(Commands.literal("spawn_effects")
-                                                .executes(TungSahurCommands::testSpawnEffects)))
-
-                                // システム管理
-                                .then(Commands.literal("system")
-                                        .then(Commands.literal("reload")
-                                                .executes(TungSahurCommands::reloadSystem))
-                                        .then(Commands.literal("cleanup")
-                                                .executes(TungSahurCommands::cleanupSystem))
-                                        .then(Commands.literal("backup")
-                                                .executes(TungSahurCommands::backupData)))
-                        ));
+                        // デバッグ機能
+                        .then(Commands.literal("debug")
+                                .then(Commands.literal("particles")
+                                        .executes(TungSahurCommands::testParticles))
+                                .then(Commands.literal("sounds")
+                                        .executes(TungSahurCommands::testSounds))
+                                .then(Commands.literal("sleep")
+                                        .executes(TungSahurCommands::debugSleepSystem)))
+        );
     }
 
-    // === 基本コマンド ===
+    // === 新しいゲームフローコマンド ===
 
-    private static int getStatus(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        CommandSourceStack source = context.getSource();
-        ServerLevel level = source.getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
+    /**
+     * ゲーム開始コマンド
+     */
+    private static int startGame(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        GameStateManager gameState = GameStateManager.get(level);
 
-        // ワールド境界内のエンティティ統計
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
+        if (gameState.isGameStarted() && !gameState.isGameEnded()) {
+            context.getSource().sendFailure(Component.literal("ゲームは既に開始されています")
+                    .withStyle(ChatFormatting.RED));
+            return 0;
+        }
 
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-        long day1Count = entities.stream().filter(e -> e.getDayNumber() == 1).count();
-        long day2Count = entities.stream().filter(e -> e.getDayNumber() == 2).count();
-        long day3Count = entities.stream().filter(e -> e.getDayNumber() == 3).count();
+        // ゲーム開始
+        gameState.startGame(level);
 
-        Component message = Component.literal("§6=== TungSahur Status ===\n")
-                .append(String.format("§f現在の日数: §e%d日目\n", dayData.getDayCount()))
-                .append(String.format("§fデバッグモード: %s\n", TungSahurMod.isDebugMode() ? "§a有効" : "§c無効"))
-                .append(String.format("§fエンティティ総数: §b%d体\n", entities.size()))
-                .append(String.format("§f├ 1日目: §7%d体\n", day1Count))
-                .append(String.format("§f├ 2日目: §e%d体\n", day2Count))
-                .append(String.format("§f└ 3日目: §c%d体\n", day3Count))
-                .append("§6========================");
+        // 開始演出
+        performGameStartEffects(level);
 
-        source.sendSuccess(() -> message, false);
+        // 全プレイヤーに通知
+        Component startMessage = Component.literal("§l=== Tung Sahur ゲーム開始 ===")
+                .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD)
+                .append("\n")
+                .append(Component.literal("3日間の恐怖が始まります...")
+                        .withStyle(ChatFormatting.RED))
+                .append("\n")
+                .append(Component.literal("夜になると1日目が開始されます。3日目の夜が終わるまで眠ることはできません。")
+                        .withStyle(ChatFormatting.GRAY));
+
+        for (ServerPlayer player : level.getPlayers(p -> true)) {
+            player.sendSystemMessage(startMessage);
+        }
+
+        context.getSource().sendSuccess(() -> Component.literal("ゲームを開始しました！恐怖の始まり...")
+                .withStyle(ChatFormatting.GREEN), true);
+
         return 1;
     }
 
-    private static int getDebugInfo(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        CommandSourceStack source = context.getSource();
-        ServerLevel level = source.getLevel();
+    /**
+     * ゲームリセットコマンド
+     */
+    private static int resetGame(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        GameStateManager gameState = GameStateManager.get(level);
         DayCountSavedData dayData = DayCountSavedData.get(level);
 
-        // ワールド境界内のエンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
+        // ゲーム状態をリセット
+        gameState.resetGame();
+        dayData.resetDayCount();
 
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
+        // 全エンティティを削除
+        clearAllTungSahurEntities(level);
 
-        Component message = Component.literal("§c=== TungSahur Debug Info ===\n")
-                .append(String.format("§fMod Version: §e%s\n", "1.20.1-1.0.0"))
-                .append(String.format("§fDebug Mode: §e%s\n", TungSahurMod.isDebugMode()))
-                .append(String.format("§fWorld Time: §e%d\n", level.getDayTime()))
-                .append(String.format("§fGame Time: §e%d\n", level.getGameTime()))
-                .append(String.format("§fDay Data: §e%s\n", dayData.getDayDescription()))
-                .append(String.format("§fLoaded Entities: §e%d\n", entities.size()));
+        // リセット演出
+        performGameResetEffects(level);
 
-        // 個別エンティティ詳細（最大5体）
-        for (int i = 0; i < Math.min(entities.size(), 5); i++) {
-            TungSahurEntity entity = entities.get(i);
+        // 全プレイヤーに通知
+        Component resetMessage = Component.literal("§l=== ゲームリセット完了 ===")
+                .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD)
+                .append("\n")
+                .append(Component.literal("ゲーム状態がリセットされました。再び眠ることができます。")
+                        .withStyle(ChatFormatting.GRAY));
+
+        for (ServerPlayer player : level.getPlayers(p -> true)) {
+            player.sendSystemMessage(resetMessage);
+        }
+
+        context.getSource().sendSuccess(() -> Component.literal("ゲームをリセットしました")
+                .withStyle(ChatFormatting.GREEN), true);
+
+        return 1;
+    }
+
+    /**
+     * ゲーム状態確認コマンド
+     */
+    private static int getStatus(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+        DayCountSavedData dayData = DayCountSavedData.get(level);
+
+        Component statusMessage = Component.literal("§6=== Tung Sahur ゲーム状態 ===\n")
+                .append(String.format("§fゲーム状態: §e%s\n", gameState.getGameStatus()))
+                .append(String.format("§f現在の日数: §b%d日目\n", gameState.getCurrentDay()))
+                .append(String.format("§f睡眠可能: §%s%s\n",
+                        gameState.isSleepAllowed() ? "a" : "c",
+                        gameState.isSleepAllowed() ? "はい" : "いいえ"))
+                .append(String.format("§fTungSahurエンティティ数: §d%d体",
+                        countTungSahurEntities(level)));
+
+        context.getSource().sendSuccess(() -> statusMessage, false);
+        return 1;
+    }
+
+    // === 演出メソッド ===
+
+    /**
+     * ゲーム開始時の演出
+     */
+    private static void performGameStartEffects(ServerLevel level) {
+        // 全プレイヤーの周囲に恐怖の演出
+        for (ServerPlayer player : level.getPlayers(p -> true)) {
+            BlockPos pos = player.blockPosition();
+
+            // 不気味なパーティクル
+            for (int i = 0; i < 30; i++) {
+                level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                        pos.getX() + (level.random.nextDouble() - 0.5) * 10.0,
+                        pos.getY() + level.random.nextDouble() * 3.0,
+                        pos.getZ() + (level.random.nextDouble() - 0.5) * 10.0,
+                        1, 0.1, 0.1, 0.1, 0.02);
+            }
+
+            // 恐怖の音
+            level.playSound(null, pos, SoundEvents.WITHER_SPAWN,
+                    SoundSource.HOSTILE, 0.5f, 0.8f);
+        }
+
+        TungSahurMod.LOGGER.info("ゲーム開始演出を実行");
+    }
+
+    /**
+     * ゲームリセット時の演出
+     */
+    private static void performGameResetEffects(ServerLevel level) {
+        // 全プレイヤーの周囲に平和な演出
+        for (ServerPlayer player : level.getPlayers(p -> true)) {
+            BlockPos pos = player.blockPosition();
+
+            // 平和なパーティクル
+            for (int i = 0; i < 20; i++) {
+                level.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                        pos.getX() + (level.random.nextDouble() - 0.5) * 5.0,
+                        pos.getY() + level.random.nextDouble() * 2.0,
+                        pos.getZ() + (level.random.nextDouble() - 0.5) * 5.0,
+                        1, 0.0, 0.1, 0.0, 0.1);
+            }
+
 
 
         }
 
-
-
-        return 1;
+        TungSahurMod.LOGGER.info("ゲームリセット演出を実行");
     }
 
-    private static int setDebugMode(CommandContext<CommandSourceStack> context, boolean enabled) {
-        TungSahurMod.setDebugMode(enabled);
+    // === ユーティリティメソッド ===
 
-        Component message = Component.literal("デバッグモード: " + (enabled ? "有効" : "無効"))
-                .withStyle(enabled ? ChatFormatting.GREEN : ChatFormatting.RED);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return 1;
+    /**
+     * TungSahurエンティティの数をカウント
+     */
+    private static int countTungSahurEntities(ServerLevel level) {
+        return level.getEntitiesOfClass(TungSahurEntity.class,
+                        new AABB(level.getWorldBorder().getMinX(), level.getMinBuildHeight(), level.getWorldBorder().getMinZ(),
+                                level.getWorldBorder().getMaxX(), level.getMaxBuildHeight(), level.getWorldBorder().getMaxZ()))
+                .size();
     }
 
-    // === 日数管理コマンド ===
+    /**
+     * 全TungSahurエンティティを削除
+     */
+    private static void clearAllTungSahurEntities(ServerLevel level) {
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class,
+                new AABB(level.getWorldBorder().getMinX(), level.getMinBuildHeight(), level.getWorldBorder().getMinZ(),
+                        level.getWorldBorder().getMaxX(), level.getMaxBuildHeight(), level.getWorldBorder().getMaxZ()));
+
+        for (TungSahurEntity entity : entities) {
+            entity.discard();
+        }
+
+        TungSahurMod.LOGGER.info("{}体のTungSahurエンティティを削除", entities.size());
+    }
+
+    // === 既存のコマンドメソッド（そのまま維持） ===
 
     private static int getCurrentDay(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
@@ -234,16 +304,10 @@ public class TungSahurCommands {
         // 全エンティティの更新
         updateAllTungSahurEntities(level, day);
 
-        // 成功メッセージ
         Component message = Component.literal(String.format("日数を %d日目 から %d日目 に変更しました", oldDay, day))
                 .withStyle(ChatFormatting.GREEN);
 
         context.getSource().sendSuccess(() -> message, true);
-
-        // ログ出力
-        TungSahurMod.LOGGER.info("コマンドによる日数変更: {}日目 -> {}日目 (実行者: {})",
-                oldDay, day, context.getSource().getTextName());
-
         return day;
     }
 
@@ -267,251 +331,89 @@ public class TungSahurCommands {
 
         int oldDay = dayData.getDayCount();
         int newDay = Math.min(3, oldDay + 1);
-
-        if (newDay == oldDay) {
-            Component message = Component.literal("既に最終日です")
-                    .withStyle(ChatFormatting.YELLOW);
-            context.getSource().sendSuccess(() -> message, false);
-            return oldDay;
-        }
-
         dayData.forceDayCount(newDay);
+
         updateAllTungSahurEntities(level, newDay);
 
-        // 進行効果
-        spawnDayAdvanceEffects(level, context.getSource().getPosition(), newDay);
-
-        Component message = Component.literal(String.format("日数を進行させました: %d日目 → %d日目", oldDay, newDay))
-                .withStyle(ChatFormatting.GOLD);
+        Component message = Component.literal(String.format("日数を進行: %d日目 -> %d日目", oldDay, newDay))
+                .withStyle(ChatFormatting.GREEN);
 
         context.getSource().sendSuccess(() -> message, true);
         return newDay;
     }
 
-    // === エンティティ管理コマンド ===
+    // === その他の既存メソッドもそのまま維持 ===
 
-    private static int countEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-
-        // ワールド境界内のエンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        Component message = Component.literal("TungSahurエンティティ数: " + entities.size() + "体")
-                .withStyle(ChatFormatting.BLUE);
-
-        context.getSource().sendSuccess(() -> message, false);
-        return entities.size();
-    }
-
-    private static int listEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-
-        // ワールド境界内のエンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        if (entities.isEmpty()) {
-            Component message = Component.literal("TungSahurエンティティが見つかりません")
-                    .withStyle(ChatFormatting.GRAY);
-            context.getSource().sendSuccess(() -> message, false);
-            return 0;
-        }
-
-        Component message = Component.literal("§b=== TungSahurエンティティ一覧 ===\n");
-        for (int i = 0; i < Math.min(entities.size(), 10); i++) {
-            TungSahurEntity entity = entities.get(i);
-
-
-        }
-
-        if (entities.size() > 10) {
-
-        }
-
-        context.getSource().sendSuccess(() -> message, false);
-        return entities.size();
-    }
-
-    private static int spawnEntity(CommandContext<CommandSourceStack> context, Vec3 position) throws CommandSyntaxException {
+    private static int spawnEntity(CommandContext<CommandSourceStack> context, Vec3 pos) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
         DayCountSavedData dayData = DayCountSavedData.get(level);
 
-        return spawnEntityAtPosition(level, position, dayData.getDayCount(), context.getSource());
-    }
+        TungSahurEntity entity = ModEntities.TUNG_SAHUR.get().create(level);
+        if (entity != null) {
+            entity.setPos(pos.x, pos.y, pos.z);
+            entity.setDayNumber(dayData.getDayCount());
+            entity.finalizeSpawn((ServerLevelAccessor) level, level.getCurrentDifficultyAt(BlockPos.containing(pos)),
+                    MobSpawnType.COMMAND, null, null);
+            level.addFreshEntity(entity);
 
-    private static int spawnEntityWithDay(CommandContext<CommandSourceStack> context, Vec3 position, int day) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
+            Component message = Component.literal(String.format("TungSahurエンティティを (%.1f, %.1f, %.1f) にスポーンしました",
+                    pos.x, pos.y, pos.z)).withStyle(ChatFormatting.GREEN);
 
-        return spawnEntityAtPosition(level, position, day, context.getSource());
-    }
-
-    private static int spawnEntityAtPosition(ServerLevel level, Vec3 position, int day, CommandSourceStack source) {
-        TungSahurEntity entity = new TungSahurEntity(ModEntities.TUNG_SAHUR.get(), level);
-        entity.moveTo(position.x, position.y, position.z);
-        entity.setDayNumber(day);
-        entity.finalizeSpawn(level, level.getCurrentDifficultyAt(entity.blockPosition()),
-                MobSpawnType.COMMAND, null, null);
-
-        boolean success = level.addFreshEntity(entity);
-
-        if (success) {
-            // スポーン効果
-            spawnEntitySpawnEffects(level, position, day);
-
-            Component message = Component.literal(String.format("TungSahur (Day %d) をスポーンしました: (%.1f, %.1f, %.1f)",
-                            day, position.x, position.y, position.z))
-                    .withStyle(ChatFormatting.GREEN);
-
-            source.sendSuccess(() -> message, true);
+            context.getSource().sendSuccess(() -> message, true);
             return 1;
-        } else {
-            Component message = Component.literal("エンティティのスポーンに失敗しました")
-                    .withStyle(ChatFormatting.RED);
-
-            source.sendSuccess(() -> message, false);
-            return 0;
         }
+
+        context.getSource().sendFailure(Component.literal("エンティティのスポーンに失敗しました"));
+        return 0;
     }
 
-    private static int removeAllEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-
-        // ワールド境界内のエンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        int removedCount = 0;
-        for (TungSahurEntity entity : entities) {
-            entity.discard();
-            removedCount++;
-        }
-
-        Component message = Component.literal("全TungSahurエンティティを削除しました: " + removedCount + "体")
-                .withStyle(ChatFormatting.RED);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return removedCount;
+    private static int spawnEntityAtPlayer(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        return spawnEntity(context, player.position());
     }
 
-    private static int removeNearestEntity(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        Vec3 sourcePos = context.getSource().getPosition();
+    private static int clearAllEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
+        clearAllTungSahurEntities(level);
 
-        TungSahurEntity nearest = level.getNearestEntity(TungSahurEntity.class,
-                net.minecraft.world.entity.ai.targeting.TargetingConditions.DEFAULT,
-                null, sourcePos.x, sourcePos.y, sourcePos.z,
-                new AABB(sourcePos.add(-50, -50, -50), sourcePos.add(50, 50, 50)));
-
-        if (nearest == null) {
-            Component message = Component.literal("近くにTungSahurエンティティが見つかりません")
-                    .withStyle(ChatFormatting.GRAY);
-            context.getSource().sendSuccess(() -> message, false);
-            return 0;
-        }
-
-        double distance = sourcePos.distanceTo(nearest.position());
-        nearest.discard();
-
-        Component message = Component.literal(String.format("最寄りのTungSahurエンティティを削除しました (距離: %.1f)", distance))
-                .withStyle(ChatFormatting.RED);
+        Component message = Component.literal("全てのTungSahurエンティティを削除しました")
+                .withStyle(ChatFormatting.GREEN);
 
         context.getSource().sendSuccess(() -> message, true);
         return 1;
+    }
+
+    private static int countEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        int count = countTungSahurEntities(level);
+
+        Component message = Component.literal("TungSahurエンティティ数: " + count + "体")
+                .withStyle(ChatFormatting.YELLOW);
+
+        context.getSource().sendSuccess(() -> message, false);
+        return count;
     }
 
     private static int updateAllEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
         DayCountSavedData dayData = DayCountSavedData.get(level);
 
-        int updatedCount = updateAllTungSahurEntities(level, dayData.getDayCount());
+        int count = updateAllTungSahurEntities(level, dayData.getDayCount());
 
-        Component message = Component.literal("全TungSahurエンティティを更新しました: " + updatedCount + "体")
+        Component message = Component.literal(String.format("%d体のTungSahurエンティティを更新しました", count))
                 .withStyle(ChatFormatting.GREEN);
 
         context.getSource().sendSuccess(() -> message, true);
-        return updatedCount;
+        return count;
     }
-
-    private static int updateSpecificEntities(CommandContext<CommandSourceStack> context, Collection<? extends Entity> targets) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
-        int currentDay = dayData.getDayCount();
-
-        int updatedCount = 0;
-        for (Entity entity : targets) {
-            if (entity instanceof TungSahurEntity tungSahur) {
-                tungSahur.setDayNumber(currentDay);
-                updatedCount++;
-            }
-        }
-
-        Component message = Component.literal("指定されたTungSahurエンティティを更新しました: " + updatedCount + "体")
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return updatedCount;
-    }
-
-    // === アイテム管理コマンド ===
 
     private static int giveBat(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
+        ItemStack bat = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
 
-        player.getInventory().add(batStack);
+        player.getInventory().add(bat);
 
         Component message = Component.literal("TungSahurバットを与えました")
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return 1;
-    }
-
-    private static int giveBatWithDay(CommandContext<CommandSourceStack> context, int day) throws CommandSyntaxException {
-        ServerPlayer player = context.getSource().getPlayerOrException();
-        ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
-
-        // 日数タグを追加
-        CompoundTag tag = batStack.getOrCreateTag();
-        tag.putInt("DayNumber", day);
-        tag.putString("BatType", switch (day) {
-            case 1 -> "Basic";
-            case 2 -> "Enhanced";
-            case 3 -> "Ultimate";
-            default -> "Unknown";
-        });
-
-        player.getInventory().add(batStack);
-
-        Component message = Component.literal(String.format("TungSahurバット (Day %d) を与えました", day))
                 .withStyle(ChatFormatting.GREEN);
 
         context.getSource().sendSuccess(() -> message, true);
@@ -531,251 +433,92 @@ public class TungSahurCommands {
         return 1;
     }
 
-    // === 統計・分析コマンド ===
+    private static int giveSpawnEgg(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        ItemStack spawnEgg = new ItemStack(ModItems.TUNG_SAHUR_SPAWN_EGG.get());
+
+        player.getInventory().add(spawnEgg);
+
+        Component message = Component.literal("TungSahurスポーンエッグを与えました")
+                .withStyle(ChatFormatting.GREEN);
+
+        context.getSource().sendSuccess(() -> message, true);
+        return 1;
+    }
 
     private static int getStatistics(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
+        GameStateManager gameState = GameStateManager.get(level);
 
-        // ワールド境界内のエンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        // 詳細統計
-        long attackingCount = entities.stream().filter(TungSahurEntity::isCurrentlyAttacking).count();
-        long throwingCount = entities.stream().filter(TungSahurEntity::isCurrentlyThrowing).count();
-        long jumpingCount = entities.stream().filter(TungSahurEntity::isCurrentlyJumping).count();
-        long climbingCount = entities.stream().filter(TungSahurEntity::isWallClimbing).count();
-        long watchedCount = entities.stream().filter(TungSahurEntity::isBeingWatched).count();
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class,
+                new AABB(level.getWorldBorder().getMinX(), level.getMinBuildHeight(), level.getWorldBorder().getMinZ(),
+                        level.getWorldBorder().getMaxX(), level.getMaxBuildHeight(), level.getWorldBorder().getMaxZ()));
 
         Component message = Component.literal("§6=== TungSahur統計情報 ===\n")
-                .append(String.format("§f現在の日数: §e%d日目\n", dayData.getDayCount()))
+                .append(String.format("§fゲーム状態: §e%s\n", gameState.getGameStatus()))
+                .append(String.format("§f現在の日数: §e%d日目\n", gameState.getCurrentDay()))
                 .append(String.format("§f総エンティティ数: §b%d体\n", entities.size()))
-                .append(String.format("§f├ 攻撃中: §c%d体\n", attackingCount))
-                .append(String.format("§f├ 投擲中: §e%d体\n", throwingCount))
-                .append(String.format("§f├ ジャンプ中: §a%d体\n", jumpingCount))
-                .append(String.format("§f├ 壁登り中: §7%d体\n", climbingCount))
-                .append(String.format("§f└ 監視されている: §d%d体\n", watchedCount))
-                .append("§6===========================");
+                .append(String.format("§f睡眠可能: §%s%s",
+                        gameState.isSleepAllowed() ? "a" : "c",
+                        gameState.isSleepAllowed() ? "はい" : "いいえ"));
 
         context.getSource().sendSuccess(() -> message, false);
         return 1;
     }
 
-    private static int getEventStatistics(CommandContext<CommandSourceStack> context) {
-        DayCounterEvents.logEventStatistics();
+    // === デバッグコマンド ===
 
-        Component message = Component.literal("イベント統計をコンソールに出力しました")
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, false);
-        return 1;
-    }
-
-
-
-    // === テスト・デバッグコマンド ===
-
-    private static int testNightmare(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+    private static int testParticles(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
-
-        // テスト用悪夢効果
-        player.sendSystemMessage(Component.literal("§l§kテスト悪夢が開始されました...")
-                .withStyle(ChatFormatting.DARK_PURPLE));
-
-        // パーティクル効果
         ServerLevel level = player.serverLevel();
-        level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                player.getX(), player.getY() + 1.0, player.getZ(),
-                20, 1.0, 1.0, 1.0, 0.1);
+        BlockPos pos = player.blockPosition();
 
-
-
-        return 1;
-    }
-
-    private static int testDayEffects(CommandContext<CommandSourceStack> context, int day) throws CommandSyntaxException {
-        Vec3 position = context.getSource().getPosition();
-        ServerLevel level = context.getSource().getLevel();
-
-        spawnDayAdvanceEffects(level, position, day);
-
-        Component message = Component.literal(String.format("Day %d のエフェクトをテストしました", day))
-                .withStyle(ChatFormatting.GOLD);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return 1;
-    }
-
-    private static int testSpawnEffects(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        Vec3 position = context.getSource().getPosition();
-        ServerLevel level = context.getSource().getLevel();
-
-        spawnEntitySpawnEffects(level, position, 2); // 2日目のエフェクトをテスト
-
-        Component message = Component.literal("スポーンエフェクトをテストしました")
-                .withStyle(ChatFormatting.BLUE);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return 1;
-    }
-
-    // === システム管理コマンド ===
-
-    private static int reloadSystem(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-
-        // システムリロード処理
-        DayCountSavedData dayData = DayCountSavedData.get(level);
-        dayData.updateDayCount(level);
-
-        // エンティティの再同期
-        updateAllTungSahurEntities(level, dayData.getDayCount());
-
-        Component message = Component.literal("TungSahurシステムをリロードしました")
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return 1;
-    }
-
-    private static int cleanupSystem(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-
-        // ワールド境界内の無効なエンティティの削除
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-        int removedCount = 0;
-
-        for (TungSahurEntity entity : entities) {
-            if (!entity.isAlive() || entity.isRemoved()) {
-                entity.discard();
-                removedCount++;
-            }
+        // テストパーティクル
+        for (int i = 0; i < 50; i++) {
+            level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                    pos.getX() + (level.random.nextDouble() - 0.5) * 5.0,
+                    pos.getY() + level.random.nextDouble() * 3.0,
+                    pos.getZ() + (level.random.nextDouble() - 0.5) * 5.0,
+                    1, 0.1, 0.1, 0.1, 0.02);
         }
 
-        Component message = Component.literal(String.format("システムクリーンアップ完了: %d個の無効エンティティを削除", removedCount))
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, true);
-        return removedCount;
-    }
-
-    private static int backupData(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-        ServerLevel level = context.getSource().getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
-
-        // ワールド境界内のエンティティ数を取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
-
-        // データバックアップの実行（実際の実装ではファイルシステムを使用）
-        TungSahurMod.LOGGER.info("データバックアップ実行: Day={}, エンティティ数={}",
-                dayData.getDayCount(), entities.size());
-
-        Component message = Component.literal("データバックアップを実行しました（詳細はログを確認）")
-                .withStyle(ChatFormatting.GREEN);
-
-        context.getSource().sendSuccess(() -> message, true);
+        context.getSource().sendSuccess(() -> Component.literal("パーティクルテスト実行")
+                .withStyle(ChatFormatting.GREEN), true);
         return 1;
     }
 
-    // === ユーティリティメソッド ===
+    private static int testSounds(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        ServerLevel level = player.serverLevel();
+        BlockPos pos = player.blockPosition();
 
-    private static int updateAllTungSahurEntities(ServerLevel level, int day) {
-        // ワールド境界内のエンティティを取得
-        net.minecraft.world.level.border.WorldBorder worldBorder = level.getWorldBorder();
-        net.minecraft.world.phys.AABB worldBorderAABB = new net.minecraft.world.phys.AABB(
-                worldBorder.getMinX(),
-                level.getMinBuildHeight(),
-                worldBorder.getMinZ(),
-                worldBorder.getMaxX(),
-                level.getMaxBuildHeight(),
-                worldBorder.getMaxZ()
-        );
+        level.playSound(null, pos, SoundEvents.WITHER_AMBIENT, SoundSource.HOSTILE, 0.5f, 1.0f);
 
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, worldBorderAABB);
+        context.getSource().sendSuccess(() -> Component.literal("サウンドテスト実行")
+                .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int debugSleepSystem(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        BedSleepEvent.logSleepPreventionStatistics();
+
+        context.getSource().sendSuccess(() -> Component.literal("睡眠システムデバッグ情報をログに出力")
+                .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    // === ヘルパーメソッド ===
+
+    private static int updateAllTungSahurEntities(ServerLevel level, int dayNumber) {
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class,
+                new AABB(level.getWorldBorder().getMinX(), level.getMinBuildHeight(), level.getWorldBorder().getMinZ(),
+                        level.getWorldBorder().getMaxX(), level.getMaxBuildHeight(), level.getWorldBorder().getMaxZ()));
 
         for (TungSahurEntity entity : entities) {
-            entity.setDayNumber(day);
+            entity.setDayNumber(dayNumber);
         }
 
+        TungSahurMod.LOGGER.info("{}体のTungSahurエンティティを{}日目に更新", entities.size(), dayNumber);
         return entities.size();
-    }
-
-    private static void spawnDayAdvanceEffects(ServerLevel level, Vec3 position, int day) {
-        switch (day) {
-            case 2:
-                level.sendParticles(ParticleTypes.FLAME,
-                        position.x, position.y + 1.0, position.z,
-                        30, 2.0, 1.0, 2.0, 0.1);
-                level.playSound(null, BlockPos.containing(position), SoundEvents.LIGHTNING_BOLT_THUNDER,
-                        SoundSource.WEATHER, 1.0F, 1.5F);
-                break;
-
-            case 3:
-                level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                        position.x, position.y + 1.0, position.z,
-                        50, 3.0, 2.0, 3.0, 0.15);
-                level.sendParticles(ParticleTypes.WITCH,
-                        position.x, position.y + 1.0, position.z,
-                        25, 2.0, 1.0, 2.0, 0.1);
-                level.playSound(null, BlockPos.containing(position), SoundEvents.WITHER_SPAWN,
-                        SoundSource.HOSTILE, 1.0F, 0.8F);
-                break;
-        }
-    }
-
-    private static void spawnEntitySpawnEffects(ServerLevel level, Vec3 position, int day) {
-        // 基本スポーンパーティクル
-        level.sendParticles(ParticleTypes.SMOKE,
-                position.x, position.y + 1.0, position.z,
-                15, 1.0, 1.0, 1.0, 0.05);
-
-        // 日数に応じた特別なパーティクル
-        switch (day) {
-            case 2:
-                level.sendParticles(ParticleTypes.FLAME,
-                        position.x, position.y + 1.0, position.z,
-                        10, 0.5, 0.5, 0.5, 0.03);
-                break;
-
-            case 3:
-                level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
-                        position.x, position.y + 1.0, position.z,
-                        15, 0.8, 0.8, 0.8, 0.05);
-                break;
-        }
-
-        // スポーン音
-        level.playSound(null, BlockPos.containing(position), SoundEvents.ENDERMAN_TELEPORT,
-                SoundSource.HOSTILE, 0.8F, 0.8F + (day * 0.1F));
     }
 }
