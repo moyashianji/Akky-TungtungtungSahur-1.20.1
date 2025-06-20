@@ -99,24 +99,28 @@ public class GameStateManager extends SavedData {
         // 朝の時間帯かチェック（6000tick = 午前6時頃から）
         boolean isMorning = timeOfDay >= 6000L && timeOfDay < 13000L;
 
-        // === 新しい夜の検出と日数進行 ===
-        if (isNight && currentGameDay != lastNightCheck && currentGameDay >= 0) {
+        // === 新しい夜の検出と日数進行（修正版） ===
+        if (isNight && currentGameDay >= 0) {
             int newDay = (int) currentGameDay + 1;
 
             // 重複防止：既に同じ日数なら処理しない
             if (newDay <= 3 && newDay > this.currentDay) {
-                this.currentDay = newDay;
-                this.lastNightCheck = currentGameDay;
-                this.setDirty();
-
-                TungSahurMod.LOGGER.info("{}日目の夜が開始 - ゲーム時間: {}", newDay, currentTime);
-
-                // 3日目の夜が開始された時の記録
-                if (newDay == 3) {
-                    this.day3NightStarted = true;
-                    this.day3NightStartTime = currentTime;
+                // lastNightCheckの更新条件を緩和
+                if (currentGameDay != lastNightCheck) {
+                    this.currentDay = newDay;
+                    this.lastNightCheck = currentGameDay;
                     this.setDirty();
-                    TungSahurMod.LOGGER.info("3日目の夜が開始 - 夜明けでゲーム終了予定");
+
+                    TungSahurMod.LOGGER.info("{}日目の夜が開始 - ゲーム時間: {} (gameDay: {})",
+                            newDay, currentTime, currentGameDay);
+
+                    // 3日目の夜が開始された時の記録
+                    if (newDay == 3) {
+                        this.day3NightStarted = true;
+                        this.day3NightStartTime = currentTime;
+                        this.setDirty();
+                        TungSahurMod.LOGGER.info("3日目の夜が開始 - 夜明けでゲーム終了予定");
+                    }
                 }
             }
         }

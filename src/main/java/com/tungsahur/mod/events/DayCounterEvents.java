@@ -176,9 +176,6 @@ public class DayCounterEvents {
                         .withStyle(ChatFormatting.GREEN))
                 .append("\n")
                 .append(Component.literal("これで安らかに眠ることができます。")
-                        .withStyle(ChatFormatting.GRAY))
-                .append("\n")
-                .append(Component.literal("§e/tungsahur start§7 で新しいゲームを開始できます。")
                         .withStyle(ChatFormatting.GRAY));
 
         for (ServerPlayer player : level.getPlayers(p -> true)) {
@@ -227,7 +224,7 @@ public class DayCounterEvents {
         lastGameEndTime = 0;
         lastNotificationTime.clear();
         lastKnownDay.clear();
-        TungSahurMod.LOGGER.info("状態完全リセット実行");
+        TungSahurMod.LOGGER.info("DayCounterEvents状態完全リセット実行");
     }
 
     /**

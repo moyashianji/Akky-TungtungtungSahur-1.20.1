@@ -109,7 +109,7 @@ public class TungSahurCommands {
     // === 新しいゲームフローコマンド ===
 
     /**
-     * ゲーム開始コマンド
+     * ゲーム開始コマンド（修正版）
      */
     private static int startGame(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
@@ -120,6 +120,9 @@ public class TungSahurCommands {
                     .withStyle(ChatFormatting.RED));
             return 0;
         }
+
+        // 重要：ゲーム開始前にDayCounterEventsをリセット
+        DayCounterEvents.resetGameState();
 
         // ゲーム開始
         gameState.startGame(level);
@@ -144,16 +147,20 @@ public class TungSahurCommands {
         context.getSource().sendSuccess(() -> Component.literal("ゲームを開始しました！恐怖の始まり...")
                 .withStyle(ChatFormatting.GREEN), true);
 
+        TungSahurMod.LOGGER.info("新しいゲーム開始 - DayCounterEvents初期化完了");
         return 1;
     }
 
     /**
-     * ゲームリセットコマンド
+     * ゲームリセットコマンド（修正版）
      */
     private static int resetGame(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
         GameStateManager gameState = GameStateManager.get(level);
         DayCountSavedData dayData = DayCountSavedData.get(level);
+
+        // 重要：DayCounterEventsの状態もリセット
+        DayCounterEvents.resetGameState();
 
         // ゲーム状態をリセット
         gameState.resetGame();
@@ -179,9 +186,9 @@ public class TungSahurCommands {
         context.getSource().sendSuccess(() -> Component.literal("ゲームをリセットしました")
                 .withStyle(ChatFormatting.GREEN), true);
 
+        TungSahurMod.LOGGER.info("ゲーム完全リセット実行 - 次回開始時に正常動作予定");
         return 1;
     }
-
     /**
      * ゲーム状態確認コマンド
      */

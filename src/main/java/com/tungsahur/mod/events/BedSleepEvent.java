@@ -48,19 +48,13 @@ public class BedSleepEvent {
     // 日数に応じた特別メッセージ
     private static final Map<Integer, List<String>> DAY_SPECIFIC_MESSAGES = Map.of(
             1, Arrays.asList(
-                    "1日目... まだ始まったばかりだというのに",
-                    "今夜から悪夢の日々が始まる",
-                    "眠れば眠るほど「奴ら」は強くなる"
+                    "1日目..."
             ),
             2, Arrays.asList(
-                    "2日目... もう戻れない",
-                    "昨夜の悪夢がまた蘇る",
-                    "眠るたびに恐怖は増していく"
+                    "2日目... もう戻れない"
             ),
             3, Arrays.asList(
-                    "3日目... 終わりの始まり",
-                    "今夜眠れば、すべてが終わる",
-                    "最後の夜になるかもしれない"
+                    "3日目... "
             )
     );
 
