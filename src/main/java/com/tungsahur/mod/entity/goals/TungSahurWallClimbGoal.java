@@ -1,4 +1,4 @@
-// TungSahurWallClimbGoal.java - 強化された壁登りシステム
+// TungSahurWallClimbGoal.java - より自然で恐怖感のある壁登りシステム
 package com.tungsahur.mod.entity.goals;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -30,16 +30,19 @@ public class TungSahurWallClimbGoal extends Goal {
     private boolean isActivelyClimbing = false;
     private boolean hasReachedTarget = false;
 
-    // 強化された壁登り設定
-    private static final double MIN_HEIGHT_DIFF = 2.0D; // 最小高度差（2ブロック以上）
-    private static final double MAX_CLIMB_DISTANCE = 24.0D; // 最大登攀開始距離
-    private static final double MAX_CLIMB_HEIGHT = 16.0D; // 最大登攀高度
-    private static final double CLIMB_SPEED_BASE = 0.2D; // 基本登攀速度
-    private static final int CLIMB_DETECTION_RADIUS = 3; // 壁検出半径
+    // 改善された壁登り設定
+    private static final double MIN_HEIGHT_DIFF = 2.0D;
+    private static final double MAX_CLIMB_DISTANCE = 24.0D;
+    private static final double MAX_CLIMB_HEIGHT = 20.0D; // より高く登れるように
+    private static final double CLIMB_SPEED_BASE = 0.25D; // より速く
+    private static final int CLIMB_DETECTION_RADIUS = 4; // より広範囲で検出
 
-    // 登攀経路計算用
+    // 改善された登攀経路計算用
     private final List<BlockPos> climbPath = new ArrayList<>();
     private int currentPathIndex = 0;
+    private Vec3 lastPosition = Vec3.ZERO;
+    private int stuckCounter = 0;
+    private final Random random = new Random();
 
     public TungSahurWallClimbGoal(TungSahurEntity tungSahur) {
         this.tungSahur = tungSahur;
@@ -51,18 +54,18 @@ public class TungSahurWallClimbGoal extends Goal {
         this.target = this.tungSahur.getTarget();
         if (this.target == null || !this.target.isAlive()) return false;
 
-        // 見られている時は壁登りしない（恐怖演出）
+        // 見られている時は壁登りしない（恐怖演出強化）
         if (this.tungSahur.isBeingWatched()) return false;
 
         // ターゲットが高い位置にいる場合のみ
         double heightDiff = this.target.getY() - this.tungSahur.getY();
         if (heightDiff < MIN_HEIGHT_DIFF) return false;
 
-        // ターゲットまでの水平距離をチェック
+        // ターゲットまでの水平距離をチェック（より遠くからでも開始）
         double horizontalDistance = getHorizontalDistance(this.tungSahur.position(), this.target.position());
         if (horizontalDistance > MAX_CLIMB_DISTANCE) return false;
 
-        // 壁登り可能なルートを検索
+        // 壁登り可能なルートを検索（改善版）
         ClimbRoute route = findOptimalClimbRoute();
         if (route == null) return false;
 
@@ -73,8 +76,8 @@ public class TungSahurWallClimbGoal extends Goal {
         this.currentPathIndex = 0;
         this.targetReachPos = route.targetPos;
 
-        TungSahurMod.LOGGER.debug("壁登りルート発見: 方向={}, 経路長={}, 目標高度差={}",
-                this.climbDirection, this.climbPath.size(), heightDiff);
+        TungSahurMod.LOGGER.debug("壁登りルート発見: 日数={}, 方向={}, 経路長={}, 目標高度差={}",
+                this.tungSahur.getDayNumber(), this.climbDirection, this.climbPath.size(), heightDiff);
 
         return true;
     }
@@ -83,20 +86,22 @@ public class TungSahurWallClimbGoal extends Goal {
     public boolean canContinueToUse() {
         if (this.target == null || !this.target.isAlive()) return false;
 
-        // 見られている時は中止
+        // 見られている時は中止（恐怖演出）
         if (this.tungSahur.isBeingWatched()) return false;
 
         // 登攀完了チェック
         if (this.hasReachedTarget) return false;
 
-        // 最大登攀時間チェック（30秒）
-        if (this.climbTicks > 600) return false;
+        // スタック検出による強制終了
+        if (this.stuckCounter > 40) return false;
+
+        // 最大登攀時間チェック（40秒に延長）
+        if (this.climbTicks > 800) return false;
 
         // ターゲットが近くに来た場合は終了
         double distance = this.tungSahur.distanceTo(this.target);
-        if (distance <= 3.0D) return false;
+        if (distance <= 2.5D) return false;
 
-        // 経路が有効かチェック
         return this.currentPathIndex < this.climbPath.size() || this.isActivelyClimbing;
     }
 
@@ -108,18 +113,26 @@ public class TungSahurWallClimbGoal extends Goal {
         this.isActivelyClimbing = true;
         this.hasReachedTarget = false;
         this.tungSahur.setWallClimbing(true);
+        this.lastPosition = this.tungSahur.position();
+        this.stuckCounter = 0;
 
-        // 最大登攀高度を設定
+        // 最大登攀高度を設定（より高く）
         double heightDiff = this.target.getY() - this.tungSahur.getY();
-        this.maxClimbHeight = (int) Math.min(heightDiff + 3, MAX_CLIMB_HEIGHT);
+        this.maxClimbHeight = (int) Math.min(heightDiff + 5, MAX_CLIMB_HEIGHT);
 
-        // 壁登り開始音（より迫力のあるサウンド）
+        // 壁登り開始音（より恐ろしく）
         this.tungSahur.level().playSound(null,
                 this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
                 SoundEvents.SPIDER_STEP, SoundSource.HOSTILE,
-                0.8F, 0.8F);
+                1.0F, 0.6F); // より低い音程
 
-        // 開始時の恐怖パーティクル
+        // 恐怖音も追加
+        this.tungSahur.level().playSound(null,
+                this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
+                SoundEvents.WITHER_AMBIENT, SoundSource.HOSTILE,
+                0.3F, 1.8F);
+
+        // 開始時の恐怖パーティクル（強化）
         spawnStartClimbingEffects();
 
         TungSahurMod.LOGGER.debug("TungSahur壁登り開始: 経路={}, 最大高度={}",
@@ -132,29 +145,38 @@ public class TungSahurWallClimbGoal extends Goal {
 
         this.climbTicks++;
 
-        // 経路に沿った登攀実行
-        performAdvancedClimbing();
+        // スタック検出
+        Vec3 currentPos = this.tungSahur.position();
+        if (currentPos.distanceTo(this.lastPosition) < 0.1D) {
+            this.stuckCounter++;
+        } else {
+            this.stuckCounter = 0;
+            this.lastPosition = currentPos;
+        }
 
-        // 視覚・音響効果
-        if (this.climbTicks % 6 == 0 && this.tungSahur.level() instanceof ServerLevel serverLevel) {
+        // 改善された登攀実行
+        performSmoothClimbing();
+
+        // より頻繁な視覚・音響効果
+        if (this.climbTicks % 4 == 0 && this.tungSahur.level() instanceof ServerLevel serverLevel) {
             spawnClimbingParticles(serverLevel);
         }
 
-        if (this.climbTicks % 20 == 0) {
+        if (this.climbTicks % 15 == 0) {
             playClimbingSound();
         }
 
-        // ターゲットを見続ける
-        this.tungSahur.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
+        // ターゲットを見続ける（より自然に）
+        this.tungSahur.getLookControl().setLookAt(this.target, 20.0F, 20.0F);
 
         // 登攀完了チェック
         checkClimbCompletion();
     }
 
     /**
-     * 強化された壁登り動作
+     * より滑らかで自然な壁登り動作
      */
-    private void performAdvancedClimbing() {
+    private void performSmoothClimbing() {
         if (this.climbPath.isEmpty()) return;
 
         // 現在の目標位置を取得
@@ -164,34 +186,76 @@ public class TungSahurWallClimbGoal extends Goal {
             return;
         }
 
-        // 目標位置への移動ベクトル計算
         Vec3 currentPos = this.tungSahur.position();
         Vec3 targetPos = Vec3.atCenterOf(currentTarget);
         Vec3 direction = targetPos.subtract(currentPos).normalize();
 
-        // 日数に応じた速度調整
-        double climbSpeed = CLIMB_SPEED_BASE + (this.tungSahur.getDayNumber() * 0.05D);
+        // 日数に応じた速度調整（より強力に）
+        double climbSpeed = CLIMB_SPEED_BASE + (this.tungSahur.getDayNumber() * 0.08D);
 
-        // 壁との接触を維持するための横方向の力
-        Vec3 wallDirection = getWallDirection();
-
-        // 最終的な移動ベクトル
-        Vec3 movement = direction.scale(climbSpeed).add(wallDirection.scale(0.03D));
-
-        // Y軸の移動を強制的に上方向に（重力に対抗）
-        if (movement.y < 0.1D) {
-            movement = new Vec3(movement.x, Math.max(0.1D, movement.y + 0.15D), movement.z);
+        // 日数による壁登り速度の向上（制限なし）
+        switch (this.tungSahur.getDayNumber()) {
+            case 1:
+                climbSpeed *= 0.8D; // 1日目は少し遅め
+                break;
+            case 2:
+                climbSpeed *= 1.0D; // 基本速度
+                break;
+            case 3:
+                climbSpeed *= 1.5D; // 3日目は1.5倍の速度
+                break;
+            default:
+                climbSpeed *= 1.0D; // デフォルトは基本速度
+                break;
         }
 
-        this.tungSahur.setDeltaMovement(movement);
-        this.tungSahur.getNavigation().stop(); // 通常のナビゲーションを無効化
+        // スタック時の追加速度
+        if (this.stuckCounter > 5) {
+            climbSpeed *= 1.5D;
+        }
 
-        // 壁の方向を向く
-        this.tungSahur.setYRot(getYawForDirection(this.climbDirection));
+        // 壁との接触を維持するための力（強化）
+        Vec3 wallDirection = getWallDirection();
+        Vec3 wallAdhesion = wallDirection.scale(0.05D);
 
-        // 次のポイントに到達したかチェック
+        // より自然な移動ベクトル計算
+        Vec3 baseMovement = direction.scale(climbSpeed);
+
+        // Y軸の重力対抗を強化
+        double verticalBoost = 0.2D + (this.tungSahur.getDayNumber() * 0.05D);
+        if (baseMovement.y < verticalBoost) {
+            baseMovement = new Vec3(baseMovement.x, Math.max(verticalBoost, baseMovement.y + 0.25D), baseMovement.z);
+        }
+
+        // 最終移動ベクトル
+        Vec3 finalMovement = baseMovement.add(wallAdhesion);
+
+        // ランダムな微調整で自然さを演出
+        if (this.climbTicks % 8 == 0) {
+            double randomX = (this.random.nextDouble() - 0.5) * 0.02D;
+            double randomZ = (this.random.nextDouble() - 0.5) * 0.02D;
+            finalMovement = finalMovement.add(randomX, 0, randomZ);
+        }
+
+        this.tungSahur.setDeltaMovement(finalMovement);
+        this.tungSahur.getNavigation().stop();
+
+        // 壁の方向を向く（より滑らかに）
+        float targetYaw = getYawForDirection(this.climbDirection);
+        float currentYaw = this.tungSahur.getYRot();
+        float yawDiff = targetYaw - currentYaw;
+
+        // 角度の正規化
+        while (yawDiff > 180) yawDiff -= 360;
+        while (yawDiff < -180) yawDiff += 360;
+
+        // 滑らかな回転
+        float smoothYaw = currentYaw + yawDiff * 0.2F;
+        this.tungSahur.setYRot(smoothYaw);
+
+        // 次のポイントに到達したかチェック（より寛容に）
         double distanceToTarget = currentPos.distanceTo(targetPos);
-        if (distanceToTarget < 1.2D) {
+        if (distanceToTarget < 1.5D) {
             this.currentPathIndex++;
             if (this.currentPathIndex >= this.climbPath.size()) {
                 completeClimb();
@@ -200,47 +264,58 @@ public class TungSahurWallClimbGoal extends Goal {
     }
 
     /**
-     * 最適な登攀ルートを検索
+     * 改善された最適登攀ルート検索
      */
     private ClimbRoute findOptimalClimbRoute() {
         BlockPos tungPos = this.tungSahur.blockPosition();
         BlockPos targetPos = this.target.blockPosition();
 
-        // 各方向から最適なルートを探索
+        ClimbRoute bestRoute = null;
+        double bestScore = Double.MAX_VALUE;
+
+        // 各方向から最適なルートを探索（改善版）
         for (Direction direction : Direction.Plane.HORIZONTAL) {
-            ClimbRoute route = calculateClimbRoute(tungPos, targetPos, direction);
+            ClimbRoute route = calculateSmoothClimbRoute(tungPos, targetPos, direction);
             if (route != null && route.isValid()) {
-                return route;
+                double score = evaluateRouteQuality(route, targetPos);
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestRoute = route;
+                }
             }
         }
 
-        return null;
+        return bestRoute;
     }
 
     /**
-     * 指定方向での登攀ルートを計算
+     * より滑らかな登攀ルート計算
      */
-    private ClimbRoute calculateClimbRoute(BlockPos start, BlockPos target, Direction direction) {
+    private ClimbRoute calculateSmoothClimbRoute(BlockPos start, BlockPos target, Direction direction) {
         List<BlockPos> path = new ArrayList<>();
         BlockPos current = start;
 
-        // 登攀経路を段階的に計算
+        // 初期壁チェック（1マスでもOK、ただし最低高度をチェック）
+        if (!hasClimbableWallStructure(current, direction)) {
+            return null;
+        }
+
+        // より密な経路点を生成
         for (int height = 0; height < MAX_CLIMB_HEIGHT; height++) {
-            // 壁の存在確認
-            BlockPos wallPos = current.relative(direction);
-            if (!isClimbableWall(wallPos)) {
+            // 現在高度での壁の継続チェック
+            if (!isClimbableWall(current.relative(direction))) {
                 break;
             }
 
-            // 登攀可能な位置を追加
+            // 登攀位置の計算
             BlockPos climbPos = current.above();
             if (isValidClimbPosition(climbPos)) {
                 path.add(climbPos);
                 current = climbPos;
 
-                // ターゲット高度に到達したかチェック
-                if (current.getY() >= target.getY()) {
-                    // 目標位置への最終移動
+                // ターゲット高度付近に到達したかチェック
+                if (current.getY() >= target.getY() - 1) {
+                    // 目標位置への最終アプローチ
                     BlockPos finalPos = current.relative(direction.getOpposite());
                     if (isValidClimbPosition(finalPos)) {
                         path.add(finalPos);
@@ -252,41 +327,95 @@ public class TungSahurWallClimbGoal extends Goal {
             }
         }
 
-        // 有効な経路が見つからない場合
-        return path.size() >= 2 ? new ClimbRoute(direction, path, current) : null;
+        // 短いルートでも有効とする
+        return path.size() >= 1 ? new ClimbRoute(direction, path, current) : null;
     }
 
     /**
-     * 登攀可能な壁かチェック
+     * 登攀可能な壁構造かチェック（1マスの棒状ブロック対応）
+     */
+    private boolean hasClimbableWallStructure(BlockPos start, Direction direction) {
+        BlockPos wallPos = start.relative(direction);
+
+        // 基本的な壁の存在チェック
+        if (!isClimbableWall(wallPos)) {
+            return false;
+        }
+
+        // 1マスの棒状ブロックでも登攀可能とするため、
+        // 最低高度（3ブロック以上）の壁があるかチェック
+        int wallHeight = 0;
+        for (int y = 0; y < 20; y++) { // 最大20ブロックまでチェック
+            BlockPos checkPos = wallPos.above(y);
+            if (isClimbableWall(checkPos)) {
+                wallHeight++;
+            } else {
+                break;
+            }
+        }
+
+        // 最低3ブロック以上の高さがあれば登攀可能
+        return wallHeight >= 3;
+    }
+
+    /**
+     * ルート品質評価
+     */
+    private double evaluateRouteQuality(ClimbRoute route, BlockPos target) {
+        if (route.path.isEmpty()) return Double.MAX_VALUE;
+
+        BlockPos endPos = route.path.get(route.path.size() - 1);
+        // BlockPos用の距離計算（正しい方法）
+        double distanceToTarget = Math.sqrt(endPos.distSqr(target));
+        double pathLength = route.path.size();
+
+        // 短い距離で目標に近づけるルートを優先
+        return distanceToTarget + (pathLength * 0.1);
+    }
+
+    /**
+     * 登攀可能な壁かチェック（改善版）
      */
     private boolean isClimbableWall(BlockPos pos) {
         BlockState state = this.tungSahur.level().getBlockState(pos);
 
-        // 固体ブロックで、登攀可能な素材
         if (!state.isSolid() || state.isAir()) return false;
 
-        // 特定のブロックは登攀不可
+        // 登攀不可能なブロック（滑りやすい・特殊なブロック）
         if (state.is(Blocks.ICE) || state.is(Blocks.PACKED_ICE) ||
-                state.is(Blocks.BLUE_ICE) || state.is(Blocks.SLIME_BLOCK)) {
+                state.is(Blocks.BLUE_ICE) || state.is(Blocks.SLIME_BLOCK) ||
+                state.is(Blocks.HONEY_BLOCK) || state.is(Blocks.MAGMA_BLOCK)) {
             return false;
         }
 
+        // 絶対に登れないブロック
+        if (state.is(Blocks.BEDROCK) || state.is(Blocks.BARRIER)) {
+            return false;
+        }
+
+        // その他全てのブロックは登攀可能（日数に関係なく）
         return true;
     }
 
     /**
-     * 有効な登攀位置かチェック
+     * 有効な登攀位置かチェック（改善版）
      */
     private boolean isValidClimbPosition(BlockPos pos) {
         BlockState state = this.tungSahur.level().getBlockState(pos);
         BlockState above = this.tungSahur.level().getBlockState(pos.above());
 
-        // 空間があることを確認
-        return state.isAir() && above.isAir();
+        // 空間があることを確認（エンティティサイズ考慮）
+        boolean hasSpace = state.isAir() && above.isAir();
+
+        // 足場の安定性チェック
+        BlockState below = this.tungSahur.level().getBlockState(pos.below());
+        boolean hasSupport = below.isSolid() || this.isActivelyClimbing;
+
+        return hasSpace && (hasSupport || this.isActivelyClimbing);
     }
 
     /**
-     * 現在の目標位置を取得
+     * 現在の目標位置を取得（改善版）
      */
     private BlockPos getCurrentTargetPosition() {
         if (this.currentPathIndex >= this.climbPath.size()) {
@@ -326,102 +455,136 @@ public class TungSahurWallClimbGoal extends Goal {
     }
 
     /**
-     * 登攀開始時のエフェクト
+     * 恐怖感を演出する登攀開始エフェクト
      */
     private void spawnStartClimbingEffects() {
         if (!(this.tungSahur.level() instanceof ServerLevel serverLevel)) return;
 
         Vec3 pos = this.tungSahur.position();
 
-        // 強力な爪痕パーティクル
-        for (int i = 0; i < 15; i++) {
+        // より強烈な爪痕パーティクル
+        for (int i = 0; i < 25; i++) {
             serverLevel.sendParticles(ParticleTypes.CRIT,
-                    pos.x + (this.tungSahur.getRandom().nextDouble() - 0.5) * 1.5,
-                    pos.y + this.tungSahur.getRandom().nextDouble() * 2.0,
-                    pos.z + (this.tungSahur.getRandom().nextDouble() - 0.5) * 1.5,
-                    1, 0.2, 0.2, 0.2, 0.1);
+                    pos.x + (this.random.nextDouble() - 0.5) * 2.0,
+                    pos.y + this.random.nextDouble() * 2.5,
+                    pos.z + (this.random.nextDouble() - 0.5) * 2.0,
+                    1, 0.3, 0.3, 0.3, 0.15);
+        }
+
+        // 恐怖の煙（日数に応じて強化）
+        int smokeCount = 10 + (this.tungSahur.getDayNumber() * 5);
+        for (int i = 0; i < smokeCount; i++) {
+            serverLevel.sendParticles(ParticleTypes.SMOKE,
+                    pos.x + (this.random.nextDouble() - 0.5) * 1.5,
+                    pos.y + this.random.nextDouble() * 2.0,
+                    pos.z + (this.random.nextDouble() - 0.5) * 1.5,
+                    1, 0.15, 0.15, 0.15, 0.05);
         }
     }
 
     /**
-     * 登攀中のパーティクル効果
+     * より迫力のある登攀中パーティクル
      */
     private void spawnClimbingParticles(ServerLevel serverLevel) {
         Vec3 tungPos = this.tungSahur.position();
 
-        // 壁との接触点にパーティクル
+        // 壁との接触点により多くのパーティクル
         if (this.climbDirection != null) {
             Vec3 wallDirection = Vec3.atLowerCornerOf(this.climbDirection.getNormal());
-            Vec3 contactPoint = tungPos.add(wallDirection.scale(0.8D));
+            Vec3 contactPoint = tungPos.add(wallDirection.scale(0.9D));
 
-            // 爪による引っかき効果
-            serverLevel.sendParticles(ParticleTypes.CRIT,
-                    contactPoint.x,
-                    contactPoint.y + this.tungSahur.getBbHeight() * 0.6,
-                    contactPoint.z,
-                    3, 0.15, 0.25, 0.15, 0.05);
+            // 激しい爪による引っかき効果
+            for (int i = 0; i < 5; i++) {
+                serverLevel.sendParticles(ParticleTypes.CRIT,
+                        contactPoint.x + (this.random.nextDouble() - 0.5) * 0.3,
+                        contactPoint.y + this.tungSahur.getBbHeight() * 0.6 + (this.random.nextDouble() - 0.5) * 0.5,
+                        contactPoint.z + (this.random.nextDouble() - 0.5) * 0.3,
+                        1, 0.2, 0.3, 0.2, 0.08);
+            }
 
-            // 壁の破片（強化版）
+            // 壁の破片効果（より現実的）
             BlockPos wallPos = this.tungSahur.blockPosition().relative(this.climbDirection);
             BlockState wallState = this.tungSahur.level().getBlockState(wallPos);
 
             if (!wallState.isAir()) {
 
-
-            }
+         }
         }
 
-        // 恐怖の煙（日数に応じて濃く）
-        int smokeIntensity = this.tungSahur.getDayNumber() * 2;
+        // 恐怖の煙エフェクト（日数に応じて濃厚に）
+        int smokeIntensity = 2 + (this.tungSahur.getDayNumber() * 2);
         for (int i = 0; i < smokeIntensity; i++) {
             serverLevel.sendParticles(ParticleTypes.SMOKE,
-                    tungPos.x + (this.tungSahur.getRandom().nextDouble() - 0.5) * 1.0,
-                    tungPos.y + this.tungSahur.getRandom().nextDouble() * 1.5,
-                    tungPos.z + (this.tungSahur.getRandom().nextDouble() - 0.5) * 1.0,
-                    1, 0.1, 0.1, 0.1, 0.02);
+                    tungPos.x + (this.random.nextDouble() - 0.5) * 1.2,
+                    tungPos.y + this.random.nextDouble() * 1.8,
+                    tungPos.z + (this.random.nextDouble() - 0.5) * 1.2,
+                    1, 0.1, 0.1, 0.1, 0.03);
+        }
+
+        // 3日目は特別な赤いパーティクル
+        if (this.tungSahur.getDayNumber() >= 3 && this.climbTicks % 8 == 0) {
+            serverLevel.sendParticles(ParticleTypes.DRAGON_BREATH,
+                    tungPos.x, tungPos.y + 1.0, tungPos.z,
+                    2, 0.5, 0.5, 0.5, 0.02);
         }
     }
 
     /**
-     * 登攀音の再生
+     * より恐ろしい登攀音
      */
     private void playClimbingSound() {
-        // 基本的な爪音
+        // 基本的な爪音（音程をランダムに）
+        float pitch = 0.6F + this.random.nextFloat() * 0.6F;
         this.tungSahur.level().playSound(null,
                 this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
                 SoundEvents.SPIDER_STEP, SoundSource.HOSTILE,
-                0.5F, 0.8F + this.tungSahur.getRandom().nextFloat() * 0.4F);
+                0.7F, pitch);
 
-        // 日数に応じた追加音
-        if (this.tungSahur.getDayNumber() >= 2 && this.tungSahur.getRandom().nextFloat() < 0.3F) {
+        // 日数に応じた恐怖音
+        if (this.tungSahur.getDayNumber() >= 2 && this.random.nextFloat() < 0.4F) {
             this.tungSahur.level().playSound(null,
                     this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
                     SoundEvents.WITHER_AMBIENT, SoundSource.HOSTILE,
-                    0.2F, 1.5F);
+                    0.3F, 1.3F + this.random.nextFloat() * 0.4F);
+        }
+
+        // 3日目は金属音も追加
+        if (this.tungSahur.getDayNumber() >= 3 && this.random.nextFloat() < 0.3F) {
+            this.tungSahur.level().playSound(null,
+                    this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
+                    SoundEvents.ANVIL_PLACE, SoundSource.HOSTILE,
+                    0.2F, 2.0F);
         }
     }
 
     /**
-     * 登攀完了チェック
+     * 登攀完了チェック（改善版）
      */
     private void checkClimbCompletion() {
         if (this.targetReachPos != null) {
             double distanceToTarget = this.tungSahur.position().distanceTo(Vec3.atCenterOf(this.targetReachPos));
-            if (distanceToTarget < 2.0D) {
+            if (distanceToTarget < 2.5D) {
                 this.hasReachedTarget = true;
                 completeClimb();
+                return;
             }
         }
 
-        // 目標高度に到達した場合
+        // 目標高度到達チェック
         double currentHeight = this.tungSahur.getY() - this.startClimbPos.getY();
         if (currentHeight >= this.maxClimbHeight) {
+            completeClimb();
+            return;
+        }
+
+        // ターゲットと同じ高度に到達したかチェック
+        if (this.tungSahur.getY() >= this.target.getY() - 1.0D) {
             completeClimb();
         }
     }
 
     /**
-     * 登攀完了処理
+     * より自然な登攀完了処理
      */
     private void completeClimb() {
         this.isActivelyClimbing = false;
@@ -431,39 +594,67 @@ public class TungSahurWallClimbGoal extends Goal {
                 this.tungSahur.getY() - this.startClimbPos.getY(),
                 this.currentPathIndex, this.climbPath.size());
 
-        // 完了時の前進（壁から離れる）
+        // 壁から離れる自然な動作
         if (this.climbDirection != null) {
             Vec3 forwardDirection = Vec3.atLowerCornerOf(this.climbDirection.getOpposite().getNormal());
             Vec3 currentMovement = this.tungSahur.getDeltaMovement();
-            Vec3 finishMovement = currentMovement.add(forwardDirection.scale(0.4D));
+            Vec3 finishMovement = currentMovement.add(forwardDirection.scale(0.5D));
+            // 少し上向きの力も加える
+            finishMovement = new Vec3(finishMovement.x, Math.max(finishMovement.y, 0.2D), finishMovement.z);
             this.tungSahur.setDeltaMovement(finishMovement);
         }
 
-        // 完了音
+        // 恐怖感のある完了音
         this.tungSahur.level().playSound(null,
                 this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
                 SoundEvents.SPIDER_AMBIENT, SoundSource.HOSTILE,
-                0.9F, 1.0F);
+                1.2F, 0.8F);
+
+        // 邪悪な笑い声
+        this.tungSahur.level().playSound(null,
+                this.tungSahur.getX(), this.tungSahur.getY(), this.tungSahur.getZ(),
+                SoundEvents.WITCH_CELEBRATE, SoundSource.HOSTILE,
+                0.5F, 0.6F);
 
         // 完了パーティクル
         spawnCompletionEffects();
     }
 
     /**
-     * 完了時のエフェクト
+     * 恐怖感のある完了エフェクト
      */
     private void spawnCompletionEffects() {
         if (!(this.tungSahur.level() instanceof ServerLevel serverLevel)) return;
 
         Vec3 pos = this.tungSahur.position();
 
-        // 勝利の煙
-        for (int i = 0; i < 20; i++) {
-            serverLevel.sendParticles(ParticleTypes.POOF,
-                    pos.x + (this.tungSahur.getRandom().nextDouble() - 0.5) * 2.0,
-                    pos.y + this.tungSahur.getRandom().nextDouble() * 2.0,
-                    pos.z + (this.tungSahur.getRandom().nextDouble() - 0.5) * 2.0,
-                    1, 0.3, 0.3, 0.3, 0.1);
+        // 勝利の煙（より邪悪に）
+        for (int i = 0; i < 30; i++) {
+            serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE,
+                    pos.x + (this.random.nextDouble() - 0.5) * 2.5,
+                    pos.y + this.random.nextDouble() * 2.5,
+                    pos.z + (this.random.nextDouble() - 0.5) * 2.5,
+                    1, 0.4, 0.4, 0.4, 0.15);
+        }
+
+        // 邪悪な輝き
+        for (int i = 0; i < 15; i++) {
+            serverLevel.sendParticles(ParticleTypes.ENCHANT,
+                    pos.x + (this.random.nextDouble() - 0.5) * 3.0,
+                    pos.y + this.random.nextDouble() * 3.0,
+                    pos.z + (this.random.nextDouble() - 0.5) * 3.0,
+                    1, 0.5, 0.5, 0.5, 0.1);
+        }
+
+        // 3日目は特別なエフェクト
+        if (this.tungSahur.getDayNumber() >= 3) {
+            for (int i = 0; i < 10; i++) {
+                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
+                        pos.x + (this.random.nextDouble() - 0.5) * 2.0,
+                        pos.y + this.random.nextDouble() * 2.0,
+                        pos.z + (this.random.nextDouble() - 0.5) * 2.0,
+                        1, 0.3, 0.3, 0.3, 0.05);
+            }
         }
     }
 
@@ -476,6 +667,7 @@ public class TungSahurWallClimbGoal extends Goal {
         this.climbPath.clear();
         this.currentPathIndex = 0;
         this.targetReachPos = null;
+        this.stuckCounter = 0;
 
         TungSahurMod.LOGGER.debug("TungSahur壁登り終了");
     }

@@ -28,6 +28,8 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.*;
 import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
+import net.minecraft.world.entity.ai.navigation.PathNavigation;
+import net.minecraft.world.entity.ai.navigation.WallClimberNavigation;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -60,6 +62,8 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private static final EntityDataAccessor<Boolean> IS_CURRENTLY_THROWING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> IS_CURRENTLY_JUMPING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> IS_SPRINTING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Byte> CLIMBING_FLAGS =
+            SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BYTE);
 
     // アニメーション定数
     private static final RawAnimation DEATH_ANIM = RawAnimation.begin().then("death", Animation.LoopType.PLAY_ONCE);
@@ -124,48 +128,63 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.entityData.define(IS_CURRENTLY_THROWING, false);
         this.entityData.define(IS_CURRENTLY_JUMPING, false);
         this.entityData.define(IS_SPRINTING, false);
+        this.entityData.define(CLIMBING_FLAGS, (byte)0);
+
+    }
+    @Override
+    protected PathNavigation createNavigation(Level level) {
+        return new WallClimberNavigation(this, level);
+    }
+    @Override
+    public void tick() {
+        super.tick();
+        if (!this.level().isClientSide) {
+            // 蜘蛛と全く同じ: 水平衝突時に壁登り状態に設定
+            this.setClimbing(this.horizontalCollision);
+        }
     }
 
+
+
+    // 6. 壁登り状態の判定メソッド（蜘蛛と全く同じ）
+    public boolean isClimbing() {
+        return (this.entityData.get(CLIMBING_FLAGS) & 1) != 0;
+    }
+
+    // 7. 壁登り状態の設定メソッド（蜘蛛と全く同じ）
+    public void setClimbing(boolean climbing) {
+        byte flags = this.entityData.get(CLIMBING_FLAGS);
+        if (climbing) {
+            flags = (byte)(flags | 1);
+        } else {
+            flags = (byte)(flags & -2);
+        }
+        this.entityData.set(CLIMBING_FLAGS, flags);
+    }
     @Override
     protected void registerGoals() {
-        // === 機能するGoal設定 ===
         this.goalSelector.addGoal(0, new FloatGoal(this));
 
-        // 近接攻撃を最優先（確実に動作させる）
-        this.goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.0D, false) {
+        // シンプル壁登りGoalを最優先
+        this.goalSelector.addGoal(1, new TungSahurSpiderClimbGoal(this));
+
+        // 近接攻撃（壁登り中でない場合のみ）
+        this.goalSelector.addGoal(2, new MeleeAttackGoal(this, 1.0D, false) {
             @Override
             public boolean canUse() {
-                if (!super.canUse()) return false;
-
-                LivingEntity target = TungSahurEntity.this.getTarget();
-                if (target == null) return false;
-
-                double distance = TungSahurEntity.this.distanceTo(target);
-                double maxAttackDistance = switch (TungSahurEntity.this.getDayNumber()) {
-                    case 1 -> 3.5D;
-                    case 2 -> 4.0D;
-                    case 3 -> 4.5D;
-                    default -> 3.5D;
-                };
-
-                return distance <= maxAttackDistance && TungSahurEntity.this.canAttack();
-            }
-
-            @Override
-            protected void checkAndPerformAttack(LivingEntity target, double distToTargetSqr) {
-                double attackReachSqr = this.getAttackReachSqr(target);
-                if (distToTargetSqr <= attackReachSqr && this.isTimeToAttack()) {
-                    this.resetAttackCooldown();
-                    TungSahurEntity.this.performMeleeAttack(target);
-                }
+                if (TungSahurEntity.this.isWallClimbing()) return false;
+                return super.canUse();
             }
         });
 
-        // 移動Goal
-        this.goalSelector.addGoal(2, new TungSahurAdvancedMoveToTargetGoal(this, 1.0D));
-
-        // 高度な壁登りGoal（提供されたTungSahurWallClimbGoal使用）
-        this.goalSelector.addGoal(3, new TungSahurWallClimbGoal(this));
+        // 移動Goal（壁登り中でない場合のみ）
+        this.goalSelector.addGoal(3, new TungSahurAdvancedMoveToTargetGoal(this, 1.0D) {
+            @Override
+            public boolean canUse() {
+                if (TungSahurEntity.this.isWallClimbing()) return false;
+                return super.canUse();
+            }
+        });
 
         // その他の基本Goal
         this.goalSelector.addGoal(6, new RandomStrollGoal(this, 0.6D));
@@ -208,9 +227,30 @@ public class TungSahurEntity extends Monster implements GeoEntity {
                 .add(Attributes.KNOCKBACK_RESISTANCE, 0.1D); // 0.2D → 0.1D に削減
     }
 
-    // === 完璧なAI管理システム ===
+
+
+
     @Override
     public void aiStep() {
+        // 壁登り中の特別処理
+        if (this.isWallClimbing()) {
+            // 落下ダメージ無効化
+            this.fallDistance = 0.0F;
+
+            // 窒息ダメージを無効化（壁にめり込み対策）
+            this.setAirSupply(this.getMaxAirSupply());
+
+            // 基本的なAI処理のみ実行
+            if (!this.level().isClientSide) {
+                updateWatchStatus(); // 見られているかのチェックのみ継続
+            }
+
+            // 通常のaiStepを呼ばずに、最小限の処理のみ
+            this.baseTick(); // 基本的なエンティティ更新
+            return;
+        }
+
+        // 通常のAI処理
         super.aiStep();
 
         if (!this.level().isClientSide) {
@@ -219,8 +259,6 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             updateSprintStatus();
             handleSpecialAttacks();
             handleJumpLanding();
-
-
         }
     }
 
@@ -971,8 +1009,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     // === スパイダーと同じonClimbableの実装 ===
     @Override
     public boolean onClimbable() {
-        // 壁登り中またはスパイダーと同じ登攀可能判定
-        return this.isWallClimbing() || super.onClimbable();
+        return this.isClimbing();
     }
 
     @Override
