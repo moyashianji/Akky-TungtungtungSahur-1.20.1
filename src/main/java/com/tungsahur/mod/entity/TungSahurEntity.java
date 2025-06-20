@@ -1,4 +1,4 @@
-// TungSahurEntity.java - 完璧動作版（全攻撃対応）
+// TungSahurEntity.java - 完璧動作版（ダメージ削減・プレイヤー効果削除完全版）
 package com.tungsahur.mod.entity;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -164,6 +164,9 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         // 移動Goal
         this.goalSelector.addGoal(2, new TungSahurAdvancedMoveToTargetGoal(this, 1.0D));
 
+        // 高度な壁登りGoal（提供されたTungSahurWallClimbGoal使用）
+        this.goalSelector.addGoal(3, new TungSahurWallClimbGoal(this));
+
         // その他の基本Goal
         this.goalSelector.addGoal(6, new RandomStrollGoal(this, 0.6D));
         this.goalSelector.addGoal(7, new LookAtPlayerGoal(this, Player.class, 16.0F));
@@ -194,14 +197,15 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         return true;
     }
 
+    // === 大幅弱体化した属性設定 ===
     public static AttributeSupplier.Builder createAttributes() {
         return Monster.createMonsterAttributes()
-                .add(Attributes.MAX_HEALTH, 30.0D) // 弱体化
+                .add(Attributes.MAX_HEALTH, 20.0D) // 30.0D → 20.0D に削減
                 .add(Attributes.MOVEMENT_SPEED, 0.25D)
-                .add(Attributes.ATTACK_DAMAGE, 4.0D) // 弱体化
+                .add(Attributes.ATTACK_DAMAGE, 2.0D) // 4.0D → 2.0D に大幅削減
                 .add(Attributes.FOLLOW_RANGE, 32.0D)
-                .add(Attributes.ARMOR, 1.0D) // 弱体化
-                .add(Attributes.KNOCKBACK_RESISTANCE, 0.2D); // 弱体化
+                .add(Attributes.ARMOR, 0.5D) // 1.0D → 0.5D に削減
+                .add(Attributes.KNOCKBACK_RESISTANCE, 0.1D); // 0.2D → 0.1D に削減
     }
 
     // === 完璧なAI管理システム ===
@@ -215,8 +219,11 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             updateSprintStatus();
             handleSpecialAttacks();
             handleJumpLanding();
+
+
         }
     }
+
 
     /**
      * 全タイマーの更新
@@ -457,7 +464,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     }
 
     /**
-     * ジャンプ着地ダメージ
+     * ジャンプ着地ダメージ（大幅弱体化）
      */
     private void performJumpLandingDamage() {
         if (!(this.level() instanceof ServerLevel serverLevel)) return;
@@ -466,10 +473,10 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         serverLevel.sendParticles(ParticleTypes.CLOUD,
                 this.getX(), this.getY(), this.getZ(), 3, 0.5, 0.1, 0.5, 0.1);
 
-        // 衝撃波パーティクル
+        // 衝撃波パーティクル（範囲縮小）
         for (int i = 0; i < 8; i++) {
             double angle = (i / 8.0) * 2 * Math.PI;
-            double radius = 3.0; // 範囲縮小
+            double radius = 2.0; // 3.0 → 2.0 に縮小
             double x = this.getX() + Math.cos(angle) * radius;
             double z = this.getZ() + Math.sin(angle) * radius;
 
@@ -477,24 +484,30 @@ public class TungSahurEntity extends Monster implements GeoEntity {
                     x, this.getY() + 0.1, z, 1, 0.05, 0.05, 0.05, 0.05);
         }
 
-        // 範囲ダメージ（大幅に弱体化）
-        AABB damageArea = new AABB(this.blockPosition()).inflate(3.0); // 範囲縮小
+        // 範囲ダメージ（さらに弱体化）
+        AABB damageArea = new AABB(this.blockPosition()).inflate(2.0); // 3.0 → 2.0
         List<Entity> nearbyEntities = serverLevel.getEntities(this, damageArea);
 
         for (Entity entity : nearbyEntities) {
             if (entity instanceof LivingEntity living && entity != this) {
                 double distance = this.distanceTo(living);
-                if (distance <= 3.0) {
-                    // 控えめなダメージ
-                    float damage = (float) (3.0D * (1.0D - distance / 3.0D));
-                    damage = Math.max(damage, 1.0F);
+                if (distance <= 2.0) { // 3.0 → 2.0
+                    // プレイヤーには非常に軽いダメージ
+                    float damage;
+                    if (living instanceof Player) {
+                        damage = 1.0F; // プレイヤーには固定1ダメージ
+                    } else {
+                        damage = (float) (1.5D * (1.0D - distance / 2.0D)); // 3.0D → 1.5D
+                        damage = Math.max(damage, 0.5F); // 1.0F → 0.5F
+                    }
 
                     living.hurt(this.damageSources().mobAttack(this), damage);
 
-                    // 軽いノックバック（効果付与なし）
+                    // 非常に軽いノックバック（プレイヤーには特に軽く）
                     Vec3 knockback = living.position().subtract(this.position()).normalize();
+                    double knockbackStrength = living instanceof Player ? 0.1D : 0.2D; // プレイヤーにはさらに軽く
                     living.setDeltaMovement(living.getDeltaMovement().add(
-                            knockback.x * 0.3D, 0.15D, knockback.z * 0.3D));
+                            knockback.x * knockbackStrength, 0.08D, knockback.z * knockbackStrength)); // 0.15D → 0.08D
 
                     TungSahurMod.LOGGER.debug("ジャンプ着地ダメージ: {}に{}ダメージ",
                             living.getClass().getSimpleName(), damage);
@@ -504,7 +517,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
         // 着地音
         serverLevel.playSound(null, this.getX(), this.getY(), this.getZ(),
-                SoundEvents.ANVIL_LAND, SoundSource.HOSTILE, 0.5F, 0.8F);
+                SoundEvents.ANVIL_LAND, SoundSource.HOSTILE, 0.3F, 0.8F); // 0.5F → 0.3F
     }
 
     /**
@@ -528,37 +541,48 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     }
 
     /**
-     * 近接攻撃の実行
+     * 近接攻撃の実行（完全修正版）
      */
     public void performMeleeAttack(LivingEntity target) {
         this.setCurrentlyAttacking(true);
 
-        // 基本攻撃実行
+        // 基本攻撃のみ実行（追加ダメージなし）
         boolean hitSuccessful = this.doHurtTarget(target);
 
         if (hitSuccessful) {
-            // 控えめな追加ダメージ
-            float additionalDamage = this.getDayNumber() * 0.5F; // 大幅に弱体化
-            target.hurt(this.damageSources().mobAttack(this), additionalDamage);
+            // 追加ダメージを完全削除
+            // float additionalDamage = this.getDayNumber() * 0.5F; // この行を削除
 
-            // 軽いノックバック（効果付与なし）
+            // プレイヤーには非常に軽いノックバック、他エンティティには通常ノックバック
             Vec3 direction = target.position().subtract(this.position()).normalize();
-            double knockbackStrength = 0.15D + (this.getDayNumber() * 0.05D); // 弱体化
+            double knockbackStrength;
+            double verticalKnockback;
+
+            if (target instanceof Player) {
+                // プレイヤーには非常に軽いノックバック
+                knockbackStrength = 0.08D; // 大幅に削減
+                verticalKnockback = 0.03D; // 大幅に削減
+            } else {
+                // プレイヤー以外には通常のノックバック
+                knockbackStrength = 0.12D + (this.getDayNumber() * 0.03D); // それでも削減
+                verticalKnockback = 0.06D;
+            }
+
             target.setDeltaMovement(target.getDeltaMovement().add(
-                    direction.x * knockbackStrength, 0.08D, direction.z * knockbackStrength));
+                    direction.x * knockbackStrength, verticalKnockback, direction.z * knockbackStrength));
 
             // 攻撃エフェクト
             spawnMeleeAttackEffects();
 
-            TungSahurMod.LOGGER.debug("近接攻撃成功: 追加ダメージ={}", additionalDamage);
+            TungSahurMod.LOGGER.debug("近接攻撃成功: 基本ダメージのみ");
         }
 
-        // クールダウン設定
+        // クールダウン設定（延長）
         this.attackCooldown = switch (this.getDayNumber()) {
-            case 1 -> 30; // 1.5秒
-            case 2 -> 25; // 1.25秒
-            case 3 -> 20; // 1秒
-            default -> 30;
+            case 1 -> 40; // 30 → 40 (2秒)
+            case 2 -> 35; // 25 → 35 (1.75秒)
+            case 3 -> 30; // 20 → 30 (1.5秒)
+            default -> 40;
         };
 
         // 攻撃状態を少し後にリセット
@@ -820,19 +844,20 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         setScaleFactor(scale);
     }
 
+    // === 大幅弱体化した日数別属性 ===
     private void updateAttributesForDay(int day) {
         switch (day) {
             case 1:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(30.0D); // 弱体化
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(4.0D); // 弱体化
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(20.0D); // 30.0D → 20.0D
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(2.0D); // 4.0D → 2.0D
                 break;
             case 2:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(40.0D); // 弱体化
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(5.0D); // 弱体化
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(25.0D); // 40.0D → 25.0D
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(2.5D); // 5.0D → 2.5D
                 break;
             case 3:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(50.0D); // 弱体化
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(6.0D); // 弱体化
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(30.0D); // 50.0D → 30.0D
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(3.0D); // 6.0D → 3.0D
                 break;
         }
         this.setHealth(this.getMaxHealth());
@@ -942,6 +967,45 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     protected SoundEvent getDeathSound() {
         return SoundEvents.ENDERMAN_DEATH;
     }
+
+    // === スパイダーと同じonClimbableの実装 ===
+    @Override
+    public boolean onClimbable() {
+        // 壁登り中またはスパイダーと同じ登攀可能判定
+        return this.isWallClimbing() || super.onClimbable();
+    }
+
+    @Override
+    protected void checkFallDamage(double y, boolean onGround, BlockState state, BlockPos pos) {
+        // 壁登り中は落下ダメージなし（スパイダーと同じ）
+        if (this.isWallClimbing()) {
+            return;
+        }
+        super.checkFallDamage(y, onGround, state, pos);
+    }
+
+    @Override
+    public boolean causeFallDamage(float fallDistance, float multiplier, DamageSource damageSource) {
+        // 壁登り中は落下ダメージなし（スパイダーと同じ）
+        if (this.isWallClimbing()) {
+            return false;
+        }
+        return super.causeFallDamage(fallDistance, multiplier, damageSource);
+    }
+
+    // === 重力制御（スパイダーと同じ） ===
+    @Override
+    public void travel(Vec3 travelVector) {
+        if (this.isWallClimbing()) {
+            // 壁登り中の移動処理（スパイダーと同じ）
+            if (this.getDeltaMovement().y <= 0.0D) {
+                // 下降を防ぐ
+                this.setDeltaMovement(this.getDeltaMovement().multiply(1.0D, 0.0D, 1.0D));
+            }
+        }
+        super.travel(travelVector);
+    }
+
 
     @Override
     public boolean hurt(DamageSource damageSource, float amount) {

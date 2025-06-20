@@ -1,4 +1,4 @@
-// DayCounterEvents.java - 新しいゲームフロー対応版
+// DayCounterEvents.java - 無限ループ完全修正版
 package com.tungsahur.mod.events;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -34,52 +34,110 @@ public class DayCounterEvents {
     // グローバル状態管理
     private static int lastGlobalDay = 0;
     private static boolean gameEndNotificationSent = false;
+    private static boolean isGameInitialized = false;
+
+    // 無限ループ防止用フラグ（重要！）
+    private static boolean isProcessingGameProgression = false;
+    private static long lastProcessTime = 0;
+    private static final long MIN_PROCESS_INTERVAL = 20; // 1秒間隔
 
     /**
-     * サーバーティック処理 - ゲーム状態とゲーム進行の監視
+     * サーバーティック処理 - ゲーム状態とゲーム進行の監視（修正版）
      */
     @SubscribeEvent
     public static void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        if (isProcessingGameProgression) return; // 無限ループ防止
 
         MinecraftServer server = event.getServer();
         if (server == null) return;
 
-        // 全ワールドのゲーム状態をチェック
+        // 最小間隔チェック
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastProcessTime < MIN_PROCESS_INTERVAL) return;
+        lastProcessTime = currentTime;
+
+        // 最初のワールドのみ処理（無限ループ防止）
         for (ServerLevel level : server.getAllLevels()) {
             checkGameProgression(level);
+            break; // 重要：1つのワールドのみ処理
         }
     }
 
     /**
-     * ゲーム進行の確認と更新
+     * ゲーム進行の確認と更新（完全修正版）
      */
     private static void checkGameProgression(ServerLevel level) {
-        GameStateManager gameState = GameStateManager.get(level);
+        if (isProcessingGameProgression) return; // 重複実行防止
+        isProcessingGameProgression = true;
 
-        if (!gameState.isGameStarted()) return;
+        try {
+            GameStateManager gameState = GameStateManager.get(level);
 
-        // ゲーム進行をチェック
-        gameState.checkNightProgression(level);
+            // ゲームが開始されていない場合の処理
+            if (!gameState.isGameStarted()) {
+                handleGameNotStarted();
+                return;
+            }
 
-        // 日数変更の検出
-        int currentDay = gameState.getCurrentDay();
-        if (currentDay != lastGlobalDay && currentDay > 0) {
-            handleDayProgression(level, lastGlobalDay, currentDay);
-            lastGlobalDay = currentDay;
+            // ゲーム開始直後の初期化処理
+            if (!isGameInitialized) {
+                initializeGameState();
+            }
+
+            // ゲーム進行をチェック
+            gameState.checkNightProgression(level);
+
+            // 日数変更の検出
+            int currentDay = gameState.getCurrentDay();
+            if (currentDay != lastGlobalDay && currentDay > 0) {
+                handleDayProgression(level, lastGlobalDay, currentDay);
+                lastGlobalDay = currentDay;
+            }
+
+            // ゲーム終了の検出
+            if (gameState.isGameEnded() && !gameEndNotificationSent) {
+                handleGameEnd(level);
+                gameEndNotificationSent = true;
+            }
+
+        } catch (Exception e) {
+            TungSahurMod.LOGGER.error("checkGameProgression でエラー発生", e);
+        } finally {
+            isProcessingGameProgression = false; // 必ず解除
         }
+    }
 
-        // ゲーム終了の検出
-        if (gameState.isGameEnded() && !gameEndNotificationSent) {
-            handleGameEnd(level);
-            gameEndNotificationSent = true;
+    /**
+     * ゲーム未開始状態の処理
+     */
+    private static void handleGameNotStarted() {
+        // 一度だけリセット処理を行う
+        if (gameEndNotificationSent || isGameInitialized) {
+            resetGameStateInternal();
+            TungSahurMod.LOGGER.debug("ゲーム未開始 - 状態リセット完了");
         }
+    }
 
-        // ゲームがリセットされた場合
-        if (!gameState.isGameStarted() && gameEndNotificationSent) {
-            gameEndNotificationSent = false;
-            lastGlobalDay = 0;
-        }
+    /**
+     * ゲーム初期化処理
+     */
+    private static void initializeGameState() {
+        lastGlobalDay = 0;
+        gameEndNotificationSent = false;
+        isGameInitialized = true;
+        TungSahurMod.LOGGER.info("ゲーム初期化完了 - 1日目から開始可能");
+    }
+
+    /**
+     * 内部リセット処理（無限ループ防止）
+     */
+    private static void resetGameStateInternal() {
+        lastGlobalDay = 0;
+        gameEndNotificationSent = false;
+        isGameInitialized = false;
+        lastNotificationTime.clear();
+        lastKnownDay.clear();
     }
 
     /**
@@ -99,7 +157,7 @@ public class DayCounterEvents {
     }
 
     /**
-     * ゲーム終了時の処理
+     * ゲーム終了時の処理（修正版）
      */
     private static void handleGameEnd(ServerLevel level) {
         TungSahurMod.LOGGER.info("ゲーム終了: 3日間の恐怖が終了");
@@ -112,17 +170,21 @@ public class DayCounterEvents {
                         .withStyle(ChatFormatting.GREEN))
                 .append("\n")
                 .append(Component.literal("これで安らかに眠ることができます。")
+                        .withStyle(ChatFormatting.GRAY))
+                .append("\n")
+                .append(Component.literal("§e/tungsahur start§7 で新しいゲームを開始できます。")
                         .withStyle(ChatFormatting.GRAY));
 
         for (ServerPlayer player : level.getPlayers(p -> true)) {
             player.sendSystemMessage(endMessage);
-
-            // 平和な演出
             spawnPeacefulEffects(level, player);
         }
 
         // 全TungSahurエンティティを削除（平和になったため）
         removeAllTungSahurEntities(level);
+
+        // ゲーム終了後の状態準備
+        isGameInitialized = false; // 次回ゲーム開始の準備
     }
 
     /**
@@ -297,8 +359,9 @@ public class DayCounterEvents {
                     1, 0.0, 0.1, 0.0, 0.1);
         }
 
-
-
+        // 平和な音
+        level.playSound(null, player.blockPosition(), SoundEvents.PLAYER_LEVELUP,
+                SoundSource.AMBIENT, 0.7f, 1.2f);
     }
 
     /**
@@ -392,19 +455,17 @@ public class DayCounterEvents {
      * ゲーム状態のリセット（外部からの呼び出し用）
      */
     public static void resetGameState() {
-        lastGlobalDay = 0;
-        gameEndNotificationSent = false;
-        lastNotificationTime.clear();
-        lastKnownDay.clear();
+        if (isProcessingGameProgression) return; // 処理中はリセットしない
 
-        TungSahurMod.LOGGER.info("DayCounterEventsの状態をリセット");
+        resetGameStateInternal();
+        TungSahurMod.LOGGER.info("DayCounterEventsの状態を完全リセット");
     }
 
     /**
-     * デバッグ情報の取得
+     * デバッグ情報の取得（強化版）
      */
     public static String getDebugInfo() {
-        return String.format("DayCounterEvents状態: lastGlobalDay=%d, gameEndNotificationSent=%s, trackedPlayers=%d",
-                lastGlobalDay, gameEndNotificationSent, lastKnownDay.size());
+        return String.format("DayCounterEvents[lastGlobalDay=%d, gameEndSent=%s, initialized=%s, processing=%s, players=%d]",
+                lastGlobalDay, gameEndNotificationSent, isGameInitialized, isProcessingGameProgression, lastKnownDay.size());
     }
 }

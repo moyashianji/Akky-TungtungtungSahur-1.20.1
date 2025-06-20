@@ -298,49 +298,38 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         }
     }
 
+    // === 完全修正されたonHitEntity方法 ===
     @Override
     protected void onHitEntity(EntityHitResult result) {
         Entity hitEntity = result.getEntity();
 
-        // 既にヒットしたエンティティはスキップ（貫通制御）
-        if (this.hitEntities.contains(hitEntity)) {
-            return;
-        }
-
-        if (hitEntity instanceof LivingEntity livingEntity && hitEntity != this.getOwner()) {
-            // ダメージ計算
+        if (hitEntity instanceof LivingEntity target) {
+            // 基本ダメージ（大幅削減済み）
             float damage = calculateEnhancedDamage();
 
-            // ダメージ適用
-            boolean hitSuccessful = livingEntity.hurt(
-                    this.damageSources().thrown(this, this.getOwner()), damage);
-
-            if (hitSuccessful) {
-                // ヒットエンティティを記録
-                this.hitEntities.add(hitEntity);
-
-                // 日数に応じた特殊効果
-                applyEnhancedDayEffects(livingEntity);
-
-                // 強化されたノックバック
-                applyEnhancedKnockback(livingEntity);
-
-                // ヒット時の強化エフェクト
-                spawnEnhancedHitEffects(livingEntity);
-
-                TungSahurMod.LOGGER.debug("TungBatProjectile 強化ヒット: {} に {}ダメージ (貫通残り: {})",
-                        hitEntity.getClass().getSimpleName(), damage, this.pierceCount);
-
-                // 貫通チェック
-                if (this.pierceCount > 0) {
-                    this.pierceCount--;
-                    return; // 貫通して飛び続ける
-                }
+            // プレイヤーにはさらに削減
+            if (target instanceof net.minecraft.world.entity.player.Player) {
+                damage *= 0.5F; // プレイヤーには半分のダメージ
             }
+
+            // ダメージ適用
+            target.hurt(this.damageSources().thrown(this, this.getOwner()), damage);
+
+            // ノックバック（プレイヤーには軽く）
+            applyEnhancedKnockback(target);
+
+            // エフェクト（プレイヤーには適用しない）
+            applyEnhancedDayEffects(target);
+
+            // ヒットエフェクト
+            spawnEnhancedHitEffects(target);
+
+            TungSahurMod.LOGGER.debug("投擲武器ヒット: {} に {} ダメージ",
+                    target.getClass().getSimpleName(), damage);
         }
 
-        // 貫通回数を使い切った場合は消滅
-        onImpact(result.getLocation());
+        // 投擲物を削除
+        this.discard();
     }
 
     @Override
@@ -499,68 +488,89 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         }
     }
 
+    // === ダメージ計算を大幅弱体化 ===
     private float calculateEnhancedDamage() {
-        float baseDamage = 8.0F; // 基本ダメージ
-        float dayMultiplier = getThrowerDayNumber() * 2.0F; // 日数倍率
-        float speedBonus = (float) this.getDeltaMovement().length() * 2.0F; // 速度ボーナス
+        float baseDamage = 2.0F; // 8.0F → 2.0F に大幅削減
+        float dayMultiplier = getThrowerDayNumber() * 0.3F; // 2.0F → 0.3F に大幅削減
+        float speedBonus = (float) this.getDeltaMovement().length() * 0.3F; // 2.0F → 0.3F に大幅削減
 
         return (baseDamage + dayMultiplier + speedBonus) * getDamageMultiplier();
     }
 
+    // === プレイヤーへの効果を完全削除 ===
     private void applyEnhancedDayEffects(LivingEntity target) {
+        // プレイヤーには一切効果を与えない
+        if (target instanceof net.minecraft.world.entity.player.Player) {
+            return; // プレイヤーへの効果を完全削除
+        }
+
+        // プレイヤー以外への効果も大幅削減
         switch (getThrowerDayNumber()) {
             case 2:
-                // 鈍化効果
+                // 軽い鈍化効果のみ（時間とレベル大幅削減）
                 target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-                        net.minecraft.world.effect.MobEffects.MOVEMENT_SLOWDOWN, 60, 1));
+                        net.minecraft.world.effect.MobEffects.MOVEMENT_SLOWDOWN, 20, 0)); // 60→20、レベル1→0
                 break;
             case 3:
-                // 鈍化 + 暗闇
+                // 軽い鈍化のみ（暗闇効果削除）
                 target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-                        net.minecraft.world.effect.MobEffects.MOVEMENT_SLOWDOWN, 100, 2));
-                target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-                        net.minecraft.world.effect.MobEffects.BLINDNESS, 80, 0));
+                        net.minecraft.world.effect.MobEffects.MOVEMENT_SLOWDOWN, 30, 0)); // 100→30、レベル2→0
+                // 暗闇効果を完全削除
                 break;
         }
     }
 
+    // === ノックバックを大幅弱体化 ===
     private void applyEnhancedKnockback(LivingEntity target) {
+        // プレイヤーには非常に弱いノックバック
+        if (target instanceof net.minecraft.world.entity.player.Player) {
+            Vec3 direction = target.position().subtract(this.position()).normalize();
+            double knockbackStrength = 0.2D; // 非常に弱いノックバック
+
+            target.knockback(knockbackStrength, -direction.x, -direction.z);
+            return;
+        }
+
+        // プレイヤー以外への通常ノックバック（それでも削減済み）
         Vec3 direction = target.position().subtract(this.position()).normalize();
-        double knockbackStrength = 1.0D + (getThrowerDayNumber() * 0.5D);
+        double knockbackStrength = 0.4D + (getThrowerDayNumber() * 0.1D); // 1.0D + 0.5D → 0.4D + 0.1D
 
         target.knockback(knockbackStrength, -direction.x, -direction.z);
 
-        // 3日目は上方向のノックバックも追加
+        // 3日目の上方向ノックバックも大幅削減
         if (getThrowerDayNumber() >= 3) {
             Vec3 velocity = target.getDeltaMovement();
-            target.setDeltaMovement(velocity.x, velocity.y + 0.4D, velocity.z);
+            target.setDeltaMovement(velocity.x, velocity.y + 0.15D, velocity.z); // 0.4D → 0.15D
         }
     }
 
+    // === ダメージ倍率を大幅削減 ===
+    private float calculateDamageMultiplier(int dayNumber) {
+        return 1.0F + (dayNumber - 1) * 0.1F; // 0.5F → 0.1F に大幅削減
+    }
+
+    // === ヒットエフェクトを控えめに ===
     private void spawnEnhancedHitEffects(LivingEntity target) {
         if (!(this.level() instanceof ServerLevel serverLevel)) return;
 
         Vec3 pos = target.position().add(0, target.getBbHeight() * 0.5, 0);
 
-        // 強力なヒットパーティクル
+        // パーティクル量を大幅削減
         serverLevel.sendParticles(ParticleTypes.CRIT,
                 pos.x, pos.y, pos.z,
-                15 + getThrowerDayNumber() * 5, 0.5, 0.5, 0.5, 0.2);
+                5 + getThrowerDayNumber(), 0.2, 0.2, 0.2, 0.05); // 15+5 → 5+1、速度削減
 
-        // 血のような効果
+        // 血のような効果も大幅削減
         serverLevel.sendParticles(ParticleTypes.DAMAGE_INDICATOR,
                 pos.x, pos.y, pos.z,
-                10, 0.3, 0.3, 0.3, 0.0);
+                3, 0.1, 0.1, 0.1, 0.0); // 10 → 3、範囲削減
 
-        // ヒット音
+        // ヒット音も控えめに
         serverLevel.playSound(null, pos.x, pos.y, pos.z,
                 SoundEvents.PLAYER_ATTACK_CRIT, SoundSource.HOSTILE,
-                1.0F + getThrowerDayNumber() * 0.2F, 0.8F);
+                0.4F + getThrowerDayNumber() * 0.05F, 0.8F); // 1.0F+0.2F → 0.4F+0.05F
     }
 
-    private float calculateDamageMultiplier(int dayNumber) {
-        return 1.0F + (dayNumber - 1) * 0.5F;
-    }
 
     private int calculateLifetime(int dayNumber) {
         return 120 + (dayNumber * 40); // 日数に応じて生存時間延長
