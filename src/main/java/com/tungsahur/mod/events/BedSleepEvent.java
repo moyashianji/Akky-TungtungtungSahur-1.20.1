@@ -2,7 +2,10 @@
 package com.tungsahur.mod.events;
 
 import com.tungsahur.mod.TungSahurMod;
+import com.tungsahur.mod.client.overlay.TungSahurJumpscareOverlay;
+import com.tungsahur.mod.entity.ModEntities;
 import com.tungsahur.mod.entity.TungSahurEntity;
+import com.tungsahur.mod.network.NetworkHandler;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
 import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.ChatFormatting;
@@ -13,11 +16,19 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.event.entity.player.PlayerSleepInBedEvent;
 import net.minecraftforge.event.entity.player.PlayerWakeUpEvent;
+import net.minecraftforge.eventbus.api.Event;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -35,11 +46,10 @@ public class BedSleepEvent {
             "闇の奥から何かがこちらを見ている",
             "寝てはいけない... 絶対に寝てはいけない",
             "夢の中で「あいつ」に捕まってしまう",
-            "眠りは死への入り口だ...",
             "今夜、悪夢があなたを待っている",
             "ベッドの下から何かが這い出してきそうだ",
             "眠った途端に襲われる予感がする",
-            "この静寂... 何かが間違っている",
+            "トゥン......トゥン......トゥン......",
             "目を閉じたら最後、もう目覚めないかもしれない",
             "今夜だけは眠らない方がいい",
             "夢の中で追いかけられる姿が見える..."
@@ -78,9 +88,12 @@ public class BedSleepEvent {
     public static void onPlayerSleepInBed(PlayerSleepInBedEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
 
+
         ServerLevel level = player.serverLevel();
         GameStateManager gameState = GameStateManager.get(level);
 
+
+        BlockPos bedPos = event.getPos();
         // ゲーム終了後は睡眠を許可
         if (gameState.isSleepAllowed()) {
             // 睡眠成功メッセージ
@@ -92,12 +105,20 @@ public class BedSleepEvent {
         // ゲーム中は睡眠を阻止
         if (gameState.isGameActive()) {
             event.setResult(Player.BedSleepingProblem.OTHER_PROBLEM);
+            player.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 60, 1, false, false));
 
+            // ★ジャンプスケアパケットをクライアントに送信
+            NetworkHandler.sendJumpscareToPlayer(player);
             // 恐怖演出を実行
             executeTerrifyingSleepPrevention(player, level, gameState.getCurrentDay(), event.getPos());
-
+            // サーバーサイドでの音響効果
+            level.playSound(null, bedPos, SoundEvents.ENDERMAN_SCREAM, SoundSource.HOSTILE, 1.0F, 0.6F);
+            level.playSound(null, bedPos, SoundEvents.WITHER_AMBIENT, SoundSource.AMBIENT, 0.5F, 0.4F);
             TungSahurMod.LOGGER.debug("プレイヤー {} の睡眠を阻害: {}日目",
                     player.getName().getString(), gameState.getCurrentDay());
+
+
+
         }
     }
 
@@ -314,5 +335,33 @@ public class BedSleepEvent {
         TungSahurMod.LOGGER.info("日数別メッセージ: {}", DAY_SPECIFIC_MESSAGES.size());
         TungSahurMod.LOGGER.info("TungSahurささやき: {}", TUNG_SAHUR_WHISPERS.size());
         TungSahurMod.LOGGER.info("========================");
+    }
+
+
+
+    /**
+     * クライアントサイドでのジャンプスケア演出
+     */
+    @OnlyIn(Dist.CLIENT)
+    private static void displayJumpscare(Player player, BlockPos bedPos) {
+        try {
+            // TungSahurエンティティをクライアントで一時的に作成
+            TungSahurEntity tungSahur = ModEntities.TUNG_SAHUR.get().create(player.level());
+            System.out.println(tungSahur);
+            if (tungSahur != null) {
+                // エンティティの基本設定
+                tungSahur.setPos(player.getX(), player.getY(), player.getZ());
+                tungSahur.setYRot(player.getYRot());
+                tungSahur.setXRot(0.0F);
+
+                // ジャンプスケアオーバーレイを開始（エンティティを渡す）
+                TungSahurJumpscareOverlay.startJumpscare(tungSahur);
+
+                TungSahurMod.LOGGER.info("TungSahurジャンプスケア演出を開始しました");
+            }
+
+        } catch (Exception e) {
+            TungSahurMod.LOGGER.error("ジャンプスケア演出中にエラー: ", e);
+        }
     }
 }

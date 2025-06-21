@@ -2,6 +2,7 @@
 package com.tungsahur.mod.client;
 
 import com.tungsahur.mod.TungSahurMod;
+import com.tungsahur.mod.client.overlay.TungSahurJumpscareOverlay;
 import com.tungsahur.mod.client.renderer.TungBatProjectileRenderer;
 import com.tungsahur.mod.client.renderer.TungSahurRenderer;
 import com.tungsahur.mod.entity.ModEntities;
@@ -13,6 +14,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
@@ -34,7 +36,8 @@ public class ClientSetup {
 
                 // TungSahur専用バットプロパティ登録
                 registerTungSahurBatProperties();
-
+                // オーバーレイイベント登録
+                registerOverlayEvents();
                 // 日数別バットプロパティ登録
                 registerDaySpecificProperties();
 
@@ -55,11 +58,11 @@ public class ClientSetup {
      */
     private static void registerEntityRenderers() {
         try {
-            // Tung Sahurエンティティレンダラー（日数対応版）
+            // Tung Sahurエンティティレンダラー
             EntityRenderers.register(ModEntities.TUNG_SAHUR.get(), TungSahurRenderer::new);
             TungSahurMod.LOGGER.info("TungSahurRenderer正常に登録されました");
 
-            // Tung Batプロジェクタイルレンダラー（強化版）
+            // Tung Batプロジェクタイルレンダラー
             EntityRenderers.register(ModEntities.TUNG_BAT_PROJECTILE.get(), TungBatProjectileRenderer::new);
             TungSahurMod.LOGGER.info("TungBatProjectileRenderer正常に登録されました");
 
@@ -109,6 +112,7 @@ public class ClientSetup {
         }
     }
 
+
     /**
      * TungSahur専用バットプロパティの登録
      */
@@ -144,12 +148,24 @@ public class ClientSetup {
                         return itemStack.isEnchanted() ? 1.0F : 0.0F;
                     });
 
+            // 恐怖モードプロパティ
+            ItemProperties.register(ModItems.TUNG_SAHUR_BAT.get(),
+                    new ResourceLocation(TungSahurMod.MODID, "scare_mode"),
+                    (itemStack, clientLevel, livingEntity, seed) -> {
+                        // ジャンプスケア演出中は特別な表示
+                        if (TungSahurJumpscareOverlay.isJumpscareActive()) {
+                            return 1.0F;
+                        }
+                        return 0.0F;
+                    });
+
             TungSahurMod.LOGGER.debug("TungSahur専用バットプロパティ登録完了");
         } catch (Exception e) {
             TungSahurMod.LOGGER.error("TungSahurバットプロパティ登録中にエラー発生: ", e);
             throw e;
         }
     }
+
 
     /**
      * 日数別バットプロパティの登録
@@ -261,6 +277,22 @@ public class ClientSetup {
     }
 
 
+    /**
+     * オーバーレイイベントの登録
+     */
+    private static void registerOverlayEvents() {
+        try {
+            // ジャンプスケアオーバーレイをイベントバスに登録
+            MinecraftForge.EVENT_BUS.register(TungSahurJumpscareOverlay.class);
+
+            TungSahurMod.LOGGER.info("TungSahurジャンプスケアオーバーレイが正常に登録されました");
+            TungSahurMod.LOGGER.debug("オーバーレイイベント登録完了");
+
+        } catch (Exception e) {
+            TungSahurMod.LOGGER.error("オーバーレイイベント登録中にエラー発生: ", e);
+            throw e;
+        }
+    }
 
     /**
      * レンダリング統計情報の出力

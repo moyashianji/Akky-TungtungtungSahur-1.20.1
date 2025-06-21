@@ -8,6 +8,7 @@ import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.events.BedSleepEvent;
 import com.tungsahur.mod.events.DayCounterEvents;
 import com.tungsahur.mod.items.ModItems;
+import com.tungsahur.mod.network.NetworkHandler;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
 import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.core.registries.Registries;
@@ -67,6 +68,7 @@ public class TungSahurMod {
         modEventBus.addListener(this::addCreative);
         modEventBus.addListener(this::registerAttributes);
         modEventBus.addListener(this::registerSpawnPlacements);
+        modEventBus.addListener(this::setupNetwork);
 
         // Forge Event Bus登録
         MinecraftForge.EVENT_BUS.register(this);
@@ -76,7 +78,16 @@ public class TungSahurMod {
         // コンフィグ登録
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC);
     }
+    private void setupNetwork(final FMLCommonSetupEvent event) {
+        event.enqueueWork(() -> {
+            TungSahurMod.LOGGER.info("TungSahur ネットワークセットアップ開始");
 
+            // パケット登録
+            NetworkHandler.registerPackets();
+
+            TungSahurMod.LOGGER.info("TungSahur ネットワークセットアップ完了");
+        });
+    }
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("Tung Tung Tung Sahur Mod - 恐怖の始まり...");
         LOGGER.info("新しいゲームフローシステムが初期化されました");
