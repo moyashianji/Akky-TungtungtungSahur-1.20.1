@@ -68,13 +68,13 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     // アニメーション定数
     private static final RawAnimation DEATH_ANIM = RawAnimation.begin().then("death", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation IDLE_DAY1_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
-    private static final RawAnimation IDLE_DAY2_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
-    private static final RawAnimation IDLE_DAY3_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
+    private static final RawAnimation IDLE_DAY2_ANIM = RawAnimation.begin().then("idle2", Animation.LoopType.LOOP);
+    private static final RawAnimation IDLE_DAY3_ANIM = RawAnimation.begin().then("idle3", Animation.LoopType.LOOP);
     private static final RawAnimation WALK_ANIM = RawAnimation.begin().then("walk", Animation.LoopType.LOOP);
     private static final RawAnimation SPRINT_ANIM = RawAnimation.begin().then("sprint", Animation.LoopType.LOOP);
     private static final RawAnimation CLIMBING_ANIM = RawAnimation.begin().then("climbing", Animation.LoopType.LOOP);
     private static final RawAnimation ATTACK_ANIM = RawAnimation.begin().then("attack", Animation.LoopType.PLAY_ONCE);
-    private static final RawAnimation THROW_ANIM = RawAnimation.begin().then("throw", Animation.LoopType.PLAY_ONCE);
+    private static final RawAnimation THROW_ANIM = RawAnimation.begin().then("shoot_attack", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation JUMP_ATTACK_ANIM = RawAnimation.begin().then("jump_attack", Animation.LoopType.PLAY_ONCE);
 
     // 完全なAI状態管理
