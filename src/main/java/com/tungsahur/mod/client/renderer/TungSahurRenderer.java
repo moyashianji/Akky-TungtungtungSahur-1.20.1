@@ -1,9 +1,10 @@
-// TungSahurRenderer.java - 点滅バグ修正版
+// TungSahurRenderer.java - 点滅バグ修正版 + SahurItemLayer追加
 package com.tungsahur.mod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.tungsahur.mod.TungSahurMod;
 import com.tungsahur.mod.client.model.TungSahurModel;
+import com.tungsahur.mod.client.renderer.layers.SahurItemLayer; // 追加
 import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.items.ModItems;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -13,9 +14,9 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
-import software.bernie.geckolib.renderer.GeoEntityRenderer;
+import software.bernie.geckolib.renderer.DynamicGeoEntityRenderer;
 
-public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
+public class TungSahurRenderer extends DynamicGeoEntityRenderer<TungSahurEntity> {
 
     // デバッグ用フラグ
     private static final boolean DEBUG_RENDERING = false;
@@ -24,6 +25,11 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
     public TungSahurRenderer(EntityRendererProvider.Context renderManager) {
         super(renderManager, new TungSahurModel());
         this.shadowRadius = 0.7F; // 基本影サイズ
+
+        // SahurItemLayerを追加してバットを表示
+        this.addRenderLayer(new SahurItemLayer<>(this));
+
+        TungSahurMod.LOGGER.info("TungSahurRenderer初期化完了 - SahurItemLayer追加");
     }
 
     @Override
@@ -47,7 +53,7 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
         }
 
         try {
-            // メインレンダリング実行
+            // メインレンダリング実行（レイヤーも含む）
             super.render(entity, entityYaw, partialTick, poseStack, bufferSource, packedLight);
         } catch (Exception e) {
             // レンダリングエラーをキャッチして安全に処理
@@ -114,6 +120,11 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
                 break;
         }
 
+        // エンティティ用バットの設定
+        tag.putBoolean("EntityBat", true);
+        tag.putBoolean("Unbreakable", true);
+        tag.putInt("DayNumber", dayNumber);
+
         return batStack;
     }
 
@@ -156,9 +167,6 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
 
         return baseSkyLight;
     }
-
-
-
 
     /**
      * 修正された可視性チェック（点滅バグ修正）
@@ -223,11 +231,9 @@ public class TungSahurRenderer extends GeoEntityRenderer<TungSahurEntity> {
         TungSahurMod.LOGGER.debug("  生存状態: {}", entity.isAlive());
         TungSahurMod.LOGGER.debug("  削除済み: {}", entity.isRemoved());
         TungSahurMod.LOGGER.debug("  見られている: {}", entity.isBeingWatched());
+        TungSahurMod.LOGGER.debug("  メインハンド: {}", entity.getMainHandItem().getDisplayName().getString());
         TungSahurMod.LOGGER.debug("  位置: {}, {}, {}", entity.getX(), entity.getY(), entity.getZ());
         TungSahurMod.LOGGER.debug("  Tick数: {}", entity.tickCount);
         TungSahurMod.LOGGER.debug("===============================");
     }
-
-
-
 }

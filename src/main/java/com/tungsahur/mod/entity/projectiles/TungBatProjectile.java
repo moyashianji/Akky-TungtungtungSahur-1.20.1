@@ -1,4 +1,4 @@
-// TungBatProjectile.java - 地面破壊機能付き強化版
+// TungBatProjectile.java - 高精度射撃機能付き強化版
 package com.tungsahur.mod.entity.projectiles;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -33,6 +33,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.AABB;
 import net.minecraftforge.network.NetworkHooks;
 
 import java.util.*;
@@ -52,11 +53,19 @@ public class TungBatProjectile extends ThrowableItemProjectile {
     // 強化された設定
     private int maxLifetime = 200; // 10秒（従来の2倍）
     private LivingEntity homingTarget;
-    private int homingStartDelay = 15; // ホーミング開始遅延
-    private float homingStrength = 0.12F; // ホーミング強度向上
+    private int homingStartDelay = 8; // ホーミング開始遅延を短縮（15→8）
+    private float homingStrength = 0.18F; // ホーミング強度を大幅向上（0.12F→0.18F）
     private int destructionRadius = 2; // 破壊半径
     private int pierceCount = 0; // 貫通回数
     private final Set<Entity> hitEntities = new HashSet<>(); // 既にヒットしたエンティティ
+
+    // 新規追加：高精度射撃用
+    private Vec3 lastTargetPosition = Vec3.ZERO;
+    private Vec3 targetVelocity = Vec3.ZERO;
+    private int targetLostTicks = 0;
+    private static final int MAX_TARGET_LOST_TICKS = 40; // 2秒間はターゲット位置を記憶
+    private static final double PREDICTION_STRENGTH = 2.5D; // 予測射撃の強度
+    private static final double HIT_BOX_EXPANSION = 0.8D; // 当たり判定の拡大
 
     // 破壊可能なブロックリスト
     private static final Set<Block> DESTRUCTIBLE_BLOCKS = Set.of(
@@ -113,18 +122,20 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         this.setDamageMultiplier(calculateDamageMultiplier(dayNumber));
         this.maxLifetime = calculateLifetime(dayNumber);
 
-        // 日数に応じた特殊能力
+        // 日数に応じた特殊能力（精度向上）
         switch (dayNumber) {
             case 1:
                 this.destructionRadius = 1;
                 this.pierceCount = 0;
+                this.homingStrength = 0.12F;
                 break;
             case 2:
                 this.destructionRadius = 2;
                 this.pierceCount = 1;
                 this.setHoming(true);
                 this.homingTarget = tungSahur.getTarget();
-                this.homingStrength = 0.08F;
+                this.homingStrength = 0.16F; // 2日目の精度向上
+                this.homingStartDelay = 6; // より早くホーミング開始
                 break;
             case 3:
                 this.destructionRadius = 3;
@@ -132,8 +143,15 @@ public class TungBatProjectile extends ThrowableItemProjectile {
                 this.setHoming(true);
                 this.setExplosive(true);
                 this.homingTarget = tungSahur.getTarget();
-                this.homingStrength = 0.15F;
+                this.homingStrength = 0.22F; // 3日目の最高精度
+                this.homingStartDelay = 4; // 最速ホーミング開始
                 break;
+        }
+
+        // ターゲットの初期位置と速度を記録
+        if (this.homingTarget != null) {
+            this.lastTargetPosition = this.homingTarget.position();
+            this.targetVelocity = this.homingTarget.getDeltaMovement();
         }
     }
 
@@ -161,10 +179,13 @@ public class TungBatProjectile extends ThrowableItemProjectile {
             return;
         }
 
-        // ホーミング処理
-        if (isHoming() && this.tickCount > homingStartDelay && this.homingTarget != null) {
-            performEnhancedHoming();
+        // 高精度ホーミング処理
+        if (isHoming() && this.tickCount > homingStartDelay) {
+            performHighPrecisionHoming();
         }
+
+        // 近距離自動命中チェック
+        checkNearbyTargets();
 
         // 強化された軌跡効果
         spawnEnhancedTrailParticles();
@@ -178,25 +199,108 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         maintainVelocity();
     }
 
-    private void performEnhancedHoming() {
-        if (this.homingTarget == null || !this.homingTarget.isAlive()) {
-            this.setHoming(false);
-            return;
-        }
+    /**
+     * 高精度ホーミング処理（予測射撃付き）
+     */
+    private void performHighPrecisionHoming() {
+        // ターゲットの状態更新
+        updateTargetTracking();
+
+        Vec3 predictedPosition = calculatePredictedTargetPosition();
+        if (predictedPosition == null) return;
 
         Vec3 currentVelocity = this.getDeltaMovement();
-        Vec3 targetPosition = this.homingTarget.getEyePosition().add(0, -0.3, 0); // 胴体を狙う
-        Vec3 targetDirection = targetPosition.subtract(this.position()).normalize();
+        Vec3 targetDirection = predictedPosition.subtract(this.position()).normalize();
 
-        // より強力なホーミング
+        // より強力で滑らかなホーミング
         Vec3 newVelocity = currentVelocity.normalize().lerp(targetDirection, this.homingStrength);
-        double speed = Math.max(currentVelocity.length(), 1.5D); // 最低速度保証
+
+        // 速度ブースト（日数に応じて）
+        double speed = Math.max(currentVelocity.length(), 1.2D + (getThrowerDayNumber() * 0.4D));
+
+        // ターゲットが近い場合は速度を上げる
+        double distanceToTarget = this.position().distanceTo(predictedPosition);
+        if (distanceToTarget < 8.0D) {
+            speed *= 1.3D; // 近距離では30%速度アップ
+        }
 
         this.setDeltaMovement(newVelocity.scale(speed));
 
         // ホーミング時の特殊パーティクル
-        if (this.level() instanceof ServerLevel serverLevel && this.tickCount % 3 == 0) {
+        if (this.level() instanceof ServerLevel serverLevel && this.tickCount % 2 == 0) {
             spawnHomingParticles(serverLevel);
+        }
+    }
+
+    /**
+     * ターゲット追跡情報の更新
+     */
+    private void updateTargetTracking() {
+        if (this.homingTarget != null && this.homingTarget.isAlive()) {
+            // ターゲットの速度を計算
+            Vec3 currentPosition = this.homingTarget.position();
+            if (!this.lastTargetPosition.equals(Vec3.ZERO)) {
+                this.targetVelocity = currentPosition.subtract(this.lastTargetPosition);
+            }
+            this.lastTargetPosition = currentPosition;
+            this.targetLostTicks = 0;
+        } else {
+            this.targetLostTicks++;
+            if (this.targetLostTicks > MAX_TARGET_LOST_TICKS) {
+                this.setHoming(false);
+            }
+        }
+    }
+
+    /**
+     * 予測射撃でのターゲット位置計算
+     */
+    private Vec3 calculatePredictedTargetPosition() {
+        if (this.homingTarget == null) {
+            return this.lastTargetPosition.equals(Vec3.ZERO) ? null : this.lastTargetPosition;
+        }
+
+        if (!this.homingTarget.isAlive()) {
+            return this.targetLostTicks < MAX_TARGET_LOST_TICKS ? this.lastTargetPosition : null;
+        }
+
+        Vec3 currentTargetPos = this.homingTarget.getEyePosition().add(0, -0.2, 0); // 胴体中心を狙う
+
+        // 予測時間（プロジェクタイルがターゲットに到達するまでの時間）
+        double distanceToTarget = this.position().distanceTo(currentTargetPos);
+        double projectileSpeed = this.getDeltaMovement().length();
+        double timeToTarget = distanceToTarget / Math.max(projectileSpeed, 0.1D);
+
+        // ターゲットの予測位置
+        Vec3 predictedPosition = currentTargetPos.add(this.targetVelocity.scale(timeToTarget * PREDICTION_STRENGTH));
+
+        // 地面に埋まらないように調整
+        double groundY = this.level().getHeightmapPos(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING,
+                new BlockPos((int)predictedPosition.x, 0, (int)predictedPosition.z)).getY();
+        if (predictedPosition.y < groundY + 1.0D) {
+            predictedPosition = new Vec3(predictedPosition.x, groundY + 1.0D, predictedPosition.z);
+        }
+
+        return predictedPosition;
+    }
+
+    /**
+     * 近距離の自動命中チェック
+     */
+    private void checkNearbyTargets() {
+        if (!isHoming() || this.homingTarget == null) return;
+
+        double expansionRadius = HIT_BOX_EXPANSION;
+        AABB expandedBB = this.getBoundingBox().inflate(expansionRadius);
+
+        // 近くのエンティティをチェック
+        List<Entity> nearbyEntities = this.level().getEntities(this, expandedBB);
+        for (Entity entity : nearbyEntities) {
+            if (entity == this.homingTarget && entity instanceof LivingEntity) {
+                // 強制的にヒット処理
+                this.onHitEntity(new EntityHitResult(entity));
+                return;
+            }
         }
     }
 
@@ -204,8 +308,8 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         Vec3 velocity = this.getDeltaMovement();
         double currentSpeed = velocity.length();
 
-        // 最低速度を維持
-        double minSpeed = 0.8D + (getThrowerDayNumber() * 0.3D);
+        // 最低速度を維持（日数に応じて向上）
+        double minSpeed = 0.9D + (getThrowerDayNumber() * 0.4D);
         if (currentSpeed < minSpeed) {
             this.setDeltaMovement(velocity.normalize().scale(minSpeed));
         }
@@ -234,6 +338,15 @@ public class TungBatProjectile extends ThrowableItemProjectile {
                     pos.y + (random.nextDouble() - 0.5) * 0.3,
                     pos.z + (random.nextDouble() - 0.5) * 0.3,
                     -velocity.x * 0.1, -velocity.y * 0.1, -velocity.z * 0.1);
+        }
+
+        // ホーミング中は特殊な軌跡
+        if (isHoming() && random.nextFloat() < 0.8F) {
+            this.level().addParticle(ParticleTypes.ENCHANTED_HIT,
+                    pos.x, pos.y, pos.z,
+                    (random.nextDouble() - 0.5) * 0.1,
+                    (random.nextDouble() - 0.5) * 0.1,
+                    (random.nextDouble() - 0.5) * 0.1);
         }
 
         // 3日目は特殊な火花エフェクト
@@ -269,15 +382,15 @@ public class TungBatProjectile extends ThrowableItemProjectile {
     private void spawnHomingParticles(ServerLevel serverLevel) {
         Vec3 pos = this.position();
 
-        // ホーミング中の魔法的パーティクル
+        // ホーミング中の魔法的パーティクル（より濃密に）
         serverLevel.sendParticles(ParticleTypes.ENCHANTED_HIT,
                 pos.x, pos.y, pos.z,
-                3, 0.2, 0.2, 0.2, 0.1);
+                5, 0.3, 0.3, 0.3, 0.1);
 
         if (getThrowerDayNumber() >= 3) {
             serverLevel.sendParticles(ParticleTypes.SOUL,
                     pos.x, pos.y, pos.z,
-                    2, 0.1, 0.1, 0.1, 0.05);
+                    3, 0.15, 0.15, 0.15, 0.05);
         }
     }
 
@@ -290,6 +403,13 @@ public class TungBatProjectile extends ThrowableItemProjectile {
                 SoundEvents.ARROW_SHOOT, SoundSource.HOSTILE,
                 volume, pitch);
 
+        // ホーミング中は特殊音
+        if (isHoming() && this.random.nextFloat() < 0.3F) {
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                    SoundEvents.ENCHANTMENT_TABLE_USE, SoundSource.HOSTILE,
+                    volume * 0.5F, pitch * 1.2F);
+        }
+
         // 3日目は追加の不気味音
         if (getThrowerDayNumber() >= 3 && this.random.nextFloat() < 0.4F) {
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
@@ -298,13 +418,13 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         }
     }
 
-    // === 完全修正されたonHitEntity方法 ===
+    // === ヒット処理 ===
     @Override
     protected void onHitEntity(EntityHitResult result) {
         Entity hitEntity = result.getEntity();
 
         if (hitEntity instanceof LivingEntity target) {
-            // 基本ダメージ（大幅削減済み）
+            // 基本ダメージ（削減済み）
             float damage = calculateEnhancedDamage();
 
             // プレイヤーにはさらに削減
@@ -324,7 +444,7 @@ public class TungBatProjectile extends ThrowableItemProjectile {
             // ヒットエフェクト
             spawnEnhancedHitEffects(target);
 
-            TungSahurMod.LOGGER.debug("投擲武器ヒット: {} に {} ダメージ",
+            TungSahurMod.LOGGER.debug("高精度投擲武器ヒット: {} に {} ダメージ",
                     target.getClass().getSimpleName(), damage);
         }
 
@@ -428,7 +548,6 @@ public class TungBatProjectile extends ThrowableItemProjectile {
                 pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
                 8, 0.5, 0.5, 0.5, 0.1);
     }
-
 
     private void spawnDestructionEffects(ServerLevel serverLevel, Vec3 impactPos) {
         // 大規模爆発パーティクル（TNT風に強化）
@@ -570,7 +689,6 @@ public class TungBatProjectile extends ThrowableItemProjectile {
                 SoundEvents.PLAYER_ATTACK_CRIT, SoundSource.HOSTILE,
                 0.4F + getThrowerDayNumber() * 0.05F, 0.8F); // 1.0F+0.2F → 0.4F+0.05F
     }
-
 
     private int calculateLifetime(int dayNumber) {
         return 120 + (dayNumber * 40); // 日数に応じて生存時間延長

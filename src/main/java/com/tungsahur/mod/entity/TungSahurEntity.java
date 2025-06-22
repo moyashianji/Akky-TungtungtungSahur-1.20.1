@@ -155,13 +155,42 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             attackAnimationCooldown = 10;
         }
 
+        // バット装備を毎tick確認（レンダリング前に確実に装備）
         if (!this.level().isClientSide) {
+            ensureBatEquipped();
             // 蜘蛛と全く同じ: 水平衝突時に壁登り状態に設定
             this.setClimbing(this.horizontalCollision);
         }
     }
 
 
+    /**
+     * バットが装備されていることを確実にする
+     */
+    private void ensureBatEquipped() {
+        ItemStack mainHandItem = this.getItemInHand(InteractionHand.MAIN_HAND);
+
+        // メインハンドにバットが装備されていない場合、装備する
+        if (mainHandItem.isEmpty() || !mainHandItem.is(ModItems.TUNG_SAHUR_BAT.get())) {
+            equipBat();
+            TungSahurMod.LOGGER.debug("TungSahur {} にバット装備: Day{}", this.getId(), this.getDayNumber());
+        }
+
+        // オフハンドは常に空にする
+        ItemStack offHandItem = this.getItemInHand(InteractionHand.OFF_HAND);
+        if (!offHandItem.isEmpty()) {
+            this.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+        }
+    }
+
+
+    // setDayNumberメソッドも修正
+    public void setDayNumber(int day) {
+        this.entityData.set(DAY_NUMBER, day);
+        updateScaleForDay(day);
+        updateAttributesForDay(day);
+        equipBat(); // 日数変更時にバットを再装備
+    }
     // 6. 壁登り状態の判定メソッド（蜘蛛と全く同じ）
     public boolean isClimbing() {
         return (this.entityData.get(CLIMBING_FLAGS) & 1) != 0;
@@ -809,14 +838,41 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             }
         }
     }
-
     // === バット装備 ===
     private void equipBat() {
         ItemStack batStack = new ItemStack(ModItems.TUNG_SAHUR_BAT.get());
         CompoundTag tag = batStack.getOrCreateTag();
-        tag.putInt("DayNumber", getDayNumber());
+        System.out.println("batqueee");
+        // 日数に応じたカスタマイズ
+        int dayNumber = getDayNumber();
+        tag.putInt("DayNumber", dayNumber);
         tag.putBoolean("EntityBat", true);
+        tag.putBoolean("Unbreakable", true);
+        tag.putInt("HideFlags", 63);
+
+        switch (dayNumber) {
+            case 1:
+                tag.putString("DisplayName", "§7TungSahur's Bat (Day 1)");
+                break;
+            case 2:
+                tag.putString("DisplayName", "§cTungSahur's Enhanced Bat (Day 2)");
+                tag.putBoolean("Enchanted", true);
+                break;
+            case 3:
+                tag.putString("DisplayName", "§5TungSahur's Ultimate Bat (Day 3)");
+                tag.putBoolean("Enchanted", true);
+                tag.putInt("CustomModelData", 999);
+                break;
+            default:
+                tag.putString("DisplayName", "§8TungSahur's Mysterious Bat");
+                break;
+        }
+
         this.setItemInHand(InteractionHand.MAIN_HAND, batStack);
+
+        // ドロップ確率を0に設定（エンティティ用バットはドロップしない）
+        this.setDropChance(EquipmentSlot.MAINHAND, 0.0F);
+        this.setDropChance(EquipmentSlot.OFFHAND, 0.0F);
     }
 
     // === アニメーション制御 ===
@@ -947,12 +1003,6 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         return this.entityData.get(DAY_NUMBER);
     }
 
-    public void setDayNumber(int day) {
-        this.entityData.set(DAY_NUMBER, day);
-        updateScaleForDay(day);
-        updateAttributesForDay(day);
-        equipBat();
-    }
 
     private void updateScaleForDay(int day) {
         float scale = switch (day) {
@@ -1104,12 +1154,14 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     }
 
     @Override
-    public boolean causeFallDamage(float fallDistance, float multiplier, DamageSource damageSource) {
-        // 壁登り中は落下ダメージなし（スパイダーと同じ）
-        if (this.isWallClimbing()) {
-            return false;
-        }
-        return super.causeFallDamage(fallDistance, multiplier, damageSource);
+    public boolean causeFallDamage(float fallDistance, float damageMultiplier, DamageSource damageSource) {
+        // TungSahurは落下ダメージを受けない
+        return false;
+    }
+    @Override
+    protected void dropCustomDeathLoot(DamageSource source, int looting, boolean recentlyHitIn) {
+        super.dropCustomDeathLoot(source, looting, recentlyHitIn);
+        this.spawnAtLocation(new ItemStack(ModItems.TUNG_SAHUR_BAT.get()));
     }
 
     // === 重力制御（スパイダーと同じ） ===
