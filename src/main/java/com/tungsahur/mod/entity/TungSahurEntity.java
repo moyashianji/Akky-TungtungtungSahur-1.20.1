@@ -65,13 +65,23 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private static final EntityDataAccessor<Byte> CLIMBING_FLAGS =
             SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BYTE);
 
-    // アニメーション定数
+    // 既存のアニメーション定数（変更なし）
     private static final RawAnimation DEATH_ANIM = RawAnimation.begin().then("death", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation IDLE_DAY1_ANIM = RawAnimation.begin().then("idle", Animation.LoopType.LOOP);
     private static final RawAnimation IDLE_DAY2_ANIM = RawAnimation.begin().then("idle2", Animation.LoopType.LOOP);
     private static final RawAnimation IDLE_DAY3_ANIM = RawAnimation.begin().then("idle3", Animation.LoopType.LOOP);
+
+    // 既存のアニメーション（変更なし）
     private static final RawAnimation WALK_ANIM = RawAnimation.begin().then("walk", Animation.LoopType.LOOP);
     private static final RawAnimation SPRINT_ANIM = RawAnimation.begin().then("sprint", Animation.LoopType.LOOP);
+
+    // 新しく追加する日数別アニメーション
+    private static final RawAnimation WALK2_ANIM = RawAnimation.begin().then("walk2", Animation.LoopType.LOOP);
+    private static final RawAnimation SPRINT2_ANIM = RawAnimation.begin().then("sprint2", Animation.LoopType.LOOP);
+    private static final RawAnimation WALK3_ANIM = RawAnimation.begin().then("walk3", Animation.LoopType.LOOP);
+    private static final RawAnimation SPRINT3_ANIM = RawAnimation.begin().then("sprint3", Animation.LoopType.LOOP);
+
+    // 既存のアニメーション（変更なし）
     private static final RawAnimation CLIMBING_ANIM = RawAnimation.begin().then("climbing", Animation.LoopType.LOOP);
     private static final RawAnimation ATTACK_ANIM = RawAnimation.begin().then("attack", Animation.LoopType.PLAY_ONCE);
     private static final RawAnimation THROW_ANIM = RawAnimation.begin().then("shoot_attack", Animation.LoopType.PLAY_ONCE);
@@ -138,12 +148,18 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     @Override
     public void tick() {
         super.tick();
+
+        // アタックアニメーション完了チェック
+        if (isAttackAnimationPlaying && !isCurrentlyAttacking()) {
+            isAttackAnimationPlaying = false;
+            attackAnimationCooldown = 10;
+        }
+
         if (!this.level().isClientSide) {
             // 蜘蛛と全く同じ: 水平衝突時に壁登り状態に設定
             this.setClimbing(this.horizontalCollision);
         }
     }
-
 
 
     // 6. 壁登り状態の判定メソッド（蜘蛛と全く同じ）
@@ -809,42 +825,110 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         controllers.add(new AnimationController<>(this, "controller", 0, this::predicate));
     }
 
+    // predicate メソッドの修正
+// 2. アタックアニメーション制御用の変数を追加
+    private boolean isAttackAnimationPlaying = false;
+    private int attackAnimationCooldown = 0;
+
+    // 3. predicateメソッドを以下に完全に置き換え
     private PlayState predicate(AnimationState<TungSahurEntity> animationState) {
+        // アタックアニメーションのクールダウンを減らす
+        if (attackAnimationCooldown > 0) {
+            attackAnimationCooldown--;
+        }
+
+        // 現在再生中のアニメーションをチェック
+        String currentAnimName = animationState.getController().getCurrentAnimation() != null
+                ? animationState.getController().getCurrentAnimation().animation().name() : "";
+
+        // アタックアニメーションが完了したかチェック
+        if (isAttackAnimationPlaying && !currentAnimName.equals("attack")) {
+            isAttackAnimationPlaying = false;
+            attackAnimationCooldown = 10; // 10tick（0.5秒）のクールダウン
+        }
+
+        // 優先度の高いアニメーションが再生中の場合、完了まで継続
+        if (currentAnimName.equals("death") ||
+                currentAnimName.equals("attack") ||
+                currentAnimName.equals("shoot_attack") ||
+                currentAnimName.equals("jump_attack")) {
+            // アニメーションが完了していない場合は継続
+            if (!animationState.getController().getAnimationState().equals(AnimationController.State.STOPPED)) {
+                return PlayState.CONTINUE;
+            }
+        }
+
+        // 死亡アニメーション
         if (this.isDeadOrDying()) {
+            if (!currentAnimName.equals("death")) {
+                animationState.getController().forceAnimationReset();
+            }
             animationState.getController().setAnimation(DEATH_ANIM);
             return PlayState.CONTINUE;
         }
 
-        if (isCurrentlyAttacking()) {
+        // アタックアニメーション - 連続実行制御付き
+        if (isCurrentlyAttacking() && !isAttackAnimationPlaying && attackAnimationCooldown <= 0) {
+            if (!currentAnimName.equals("attack")) {
+                animationState.getController().forceAnimationReset();
+            }
             animationState.getController().setAnimation(ATTACK_ANIM);
+            isAttackAnimationPlaying = true;
             return PlayState.CONTINUE;
         }
 
+        // アタックアニメーション再生中は他のアニメーションをブロック
+        if (isAttackAnimationPlaying) {
+            return PlayState.CONTINUE;
+        }
+
+        // シュートアタックアニメーション
         if (isCurrentlyThrowing()) {
+            if (!currentAnimName.equals("shoot_attack")) {
+                animationState.getController().forceAnimationReset();
+            }
             animationState.getController().setAnimation(THROW_ANIM);
             return PlayState.CONTINUE;
         }
 
+        // ジャンプアタックアニメーション
         if (isCurrentlyJumping()) {
+            if (!currentAnimName.equals("jump_attack")) {
+                animationState.getController().forceAnimationReset();
+            }
             animationState.getController().setAnimation(JUMP_ATTACK_ANIM);
             return PlayState.CONTINUE;
         }
 
+        // 壁登りアニメーション
         if (isWallClimbing()) {
             animationState.getController().setAnimation(CLIMBING_ANIM);
             return PlayState.CONTINUE;
         }
 
+        // 走りアニメーション - 日数に応じて変更
         if (isSprinting() && animationState.isMoving()) {
-            animationState.getController().setAnimation(SPRINT_ANIM);
+            RawAnimation sprintAnim = switch (getDayNumber()) {
+                case 2 -> SPRINT2_ANIM;
+                case 3 -> SPRINT3_ANIM;
+                default -> SPRINT_ANIM;
+            };
+            animationState.getController().setAnimation(sprintAnim);
             return PlayState.CONTINUE;
         }
 
+        // 歩きアニメーション - 日数に応じて変更
         if (animationState.isMoving()) {
-            animationState.getController().setAnimation(WALK_ANIM);
+            RawAnimation walkAnim = switch (getDayNumber()) {
+                case 2 -> WALK2_ANIM;
+                case 3 -> WALK3_ANIM;
+                default -> WALK_ANIM;
+            };
+            animationState.getController().setAnimation(walkAnim);
             return PlayState.CONTINUE;
         }
 
+        // アイドルアニメーション
         RawAnimation idleAnim = switch (getDayNumber()) {
             case 2 -> IDLE_DAY2_ANIM;
             case 3 -> IDLE_DAY3_ANIM;
@@ -853,9 +937,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
         animationState.getController().setAnimation(idleAnim);
         return PlayState.CONTINUE;
-    }
-
-    @Override
+    }    @Override
     public AnimatableInstanceCache getAnimatableInstanceCache() {
         return cache;
     }
