@@ -1,4 +1,4 @@
-// DayCounterEvents.java - 完全修正版（ゲーム終了後の処理停止）
+// DayCounterEvents.java - サフール1体厳格制限版（複数スポーン完全防止）
 package com.tungsahur.mod.events;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -52,10 +52,19 @@ public class DayCounterEvents {
     // ゲーム終了処理制御
     private static long lastGameEndTime = 0;
     private static final long GAME_END_COOLDOWN = 10000; // 10秒のクールダウン
-    // クラスの先頭に追加
+
+    // 対象プレイヤー設定
     private static final String TARGET_PLAYER = "Dev";
+
+    // サフール管理（1体厳格制限対応）
     private static final Map<Integer, Boolean> dayEntityKilled = new HashMap<>();
-    private static final Map<Integer, TungSahurEntity> dayEntities = new HashMap<>();
+    private static TungSahurEntity currentTungSahurEntity = null; // 現在のサフール（1体のみ）
+    private static int currentTungSahurDay = -1; // 現在のサフールが対応している日数
+
+    // スポーン制御用フラグ（複数スポーン完全防止）
+    private static volatile boolean isSpawning = false;
+    private static long lastSpawnTime = 0;
+    private static final long MIN_SPAWN_INTERVAL = 2000; // 2秒間隔でのスポーン制限
 
     /**
      * サーバーティック処理 - 完全修正版
@@ -86,10 +95,40 @@ public class DayCounterEvents {
         for (ServerLevel level : server.getAllLevels()) {
             try {
                 checkGameProgression(level);
+                cleanupExtraEntities(level); // 余分なエンティティを定期的に削除
             } catch (Exception e) {
                 TungSahurMod.LOGGER.error("ティック処理でエラー発生", e);
             }
             break; // 重要：1つのワールドのみ処理
+        }
+    }
+
+    /**
+     * 余分なサフールエンティティを削除（1体制限強制）
+     */
+    private static void cleanupExtraEntities(ServerLevel level) {
+        // 全TungSahurエンティティを取得
+        var worldBorder = level.getWorldBorder();
+        var searchArea = new AABB(
+                worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
+                worldBorder.getMaxX(), level.getMaxBuildHeight(), worldBorder.getMaxZ()
+        );
+
+        List<TungSahurEntity> allEntities = level.getEntitiesOfClass(TungSahurEntity.class, searchArea);
+
+        // 現在のサフール以外は全て削除
+        for (TungSahurEntity entity : allEntities) {
+            if (entity != currentTungSahurEntity) {
+                entity.discard();
+                TungSahurMod.LOGGER.warn("Extra TungSahur entity removed - only one allowed!");
+            }
+        }
+
+        // 現在のサフールが死んでいる場合はnullに設定
+        if (currentTungSahurEntity != null && !currentTungSahurEntity.isAlive()) {
+            TungSahurMod.LOGGER.info("Current TungSahur is dead - clearing reference");
+            currentTungSahurEntity = null;
+            currentTungSahurDay = -1;
         }
     }
 
@@ -176,8 +215,9 @@ public class DayCounterEvents {
 
         TungSahurMod.LOGGER.info("ゲーム終了処理を開始");
 
-        // 全TungSahurエンティティを削除
-        removeAllTungSahurEntities(level);
+        // 現在のサフールを削除
+        removeCurrentTungSahur();
+        forceRemoveAllTungSahurEntities(level); // 強制的に全削除
 
         // 全プレイヤーにゲーム終了を通知
         Component endMessage = Component.literal("§l=== ゲーム終了 ===")
@@ -236,36 +276,21 @@ public class DayCounterEvents {
         lastNotificationTime.clear();
         lastKnownDay.clear();
 
-        // 新規追加
+        // サフール管理のリセット
         dayEntityKilled.clear();
-        dayEntities.clear();
+        currentTungSahurEntity = null;
+        currentTungSahurDay = -1;
+
+        // スポーン制御のリセット
+        isSpawning = false;
+        lastSpawnTime = 0;
 
         TungSahurMod.LOGGER.info("DayCounterEvents状態完全リセット実行");
     }
 
     /**
-     * 日数進行時の処理（修正版）
+     * 日数進行時の処理（1体制限版・撃破状態リセット）
      */
- ///   private static void handleDayProgression(ServerLevel level, int oldDay, int newDay) {
- ///       // 不正な日数進行を防止
- ///       if (newDay <= oldDay || newDay > 3 || oldDay < 0) {
- ///           TungSahurMod.LOGGER.warn("不正な日数進行を検出: {} -> {} - 処理をスキップ", oldDay, newDay);
- ///           return;
- ///       }
-///
- ///       TungSahurMod.LOGGER.info("日数進行: {}日目 -> {}日目", oldDay, newDay);
-///
- ///       // 全プレイヤーに通知
- ///       notifyAllPlayersOfDayChange(level, newDay);
-///
- ///       // TungSahurエンティティの更新
- ///       updateAllTungSahurEntities(level, newDay);
-///
- ///       // 日数変更時の特殊効果
- ///       triggerDayChangeEffects(level, newDay);
-///
- ///       TungSahurMod.LOGGER.info("日数更新完了: {}日目", newDay);
- ///   }
     private static void handleDayProgression(ServerLevel level, int oldDay, int newDay) {
         // 不正な日数進行を防止
         if (newDay <= oldDay || newDay > 3 || oldDay < 0) {
@@ -278,11 +303,19 @@ public class DayCounterEvents {
         // 全プレイヤーに通知
         notifyAllPlayersOfDayChange(level, newDay);
 
-        // 既存のTungSahurエンティティを削除
-        removeAllTungSahurEntities(level);
+        // ★重要★ 新しい日が始まったら、その日の撃破フラグをリセット
+        // （前の日に倒されていても、新しい日なら再びスポーン可能にする）
+        if (dayEntityKilled.containsKey(newDay)) {
+            dayEntityKilled.remove(newDay);
+            TungSahurMod.LOGGER.info("Day {} kill flag RESET - new spawns now possible", newDay);
+        }
 
-        // karaitukemen専用エンティティのスポーン
-        spawnKaraitukemenEntity(level, newDay);
+        // 現在のサフールを削除して新しい日数用にスポーン
+        removeCurrentTungSahur();
+        forceRemoveAllTungSahurEntities(level); // 念のため全削除
+
+        // 少し遅延してスポーン（削除処理完了を待つ）
+        level.getServer().tell(new TickTask(10, () -> spawnSingleTungSahur(level, newDay)));
 
         // 日数変更時の特殊効果
         triggerDayChangeEffects(level, newDay);
@@ -291,91 +324,106 @@ public class DayCounterEvents {
     }
 
     /**
-     * karaitukemen専用エンティティスポーン
+     * 単一サフールのスポーン（1体制限版・複数スポーン完全防止）
      */
-    private static void spawnKaraitukemenEntity(ServerLevel level, int day) {
-        if (dayEntityKilled.getOrDefault(day, false)) {
-            TungSahurMod.LOGGER.info("Day {} entity already killed - skipping spawn", day);
-            return;
+    private static void spawnSingleTungSahur(ServerLevel level, int day) {
+        // スポーン制御（複数スポーン完全防止）
+        synchronized (DayCounterEvents.class) {
+            long currentTime = System.currentTimeMillis();
+
+            // スポーン中フラグチェック
+            if (isSpawning) {
+                TungSahurMod.LOGGER.warn("Already spawning - preventing duplicate spawn");
+                return;
+            }
+
+            // 最小スポーン間隔チェック
+            if (currentTime - lastSpawnTime < MIN_SPAWN_INTERVAL) {
+                TungSahurMod.LOGGER.warn("Spawn too frequent - preventing duplicate spawn");
+                return;
+            }
+
+            // 現在のサフールがまだ生きている場合はスポーンしない
+            if (currentTungSahurEntity != null && currentTungSahurEntity.isAlive()) {
+                TungSahurMod.LOGGER.warn("Current TungSahur still alive - preventing duplicate spawn");
+                return;
+            }
+
+            isSpawning = true; // スポーン開始フラグ
         }
 
-        ServerPlayer karaitukemen = level.getServer().getPlayerList().getPlayerByName(TARGET_PLAYER);
-        if (karaitukemen == null) {
-            TungSahurMod.LOGGER.warn("Player {} not found - skipping spawn", TARGET_PLAYER);
-            return;
-        }
+        try {
+            // ★重要★ その日のサフールが既に倒されている場合は絶対にスポーンしない
+            if (dayEntityKilled.getOrDefault(day, false)) {
+                TungSahurMod.LOGGER.info("Day {} TungSahur already killed today - NO RESPAWN until next day", day);
+                return;
+            }
 
-        // 既存のエンティティがいる場合は無視
-        if (dayEntities.containsKey(day) && dayEntities.get(day).isAlive()) {
-            TungSahurMod.LOGGER.info("Day {} entity already exists - skipping spawn", day);
-            return;
-        }
+            // 対象プレイヤーを取得
+            ServerPlayer targetPlayer = level.getServer().getPlayerList().getPlayerByName(TARGET_PLAYER);
+            if (targetPlayer == null) {
+                TungSahurMod.LOGGER.warn("Player {} not found - skipping spawn", TARGET_PLAYER);
+                return;
+            }
 
-        // スポーン位置決定（プレイヤーの周囲20-40ブロック）
-        Vec3 playerPos = karaitukemen.position();
-        RandomSource random = level.getRandom();
-        double angle = random.nextDouble() * 2 * Math.PI;
-        double distance = 20 + random.nextDouble() * 20;
+            // 念のため全サフールを削除
+            forceRemoveAllTungSahurEntities(level);
 
-        BlockPos spawnPos = new BlockPos(
-                (int)(playerPos.x + Math.cos(angle) * distance),
-                (int)(playerPos.y + random.nextInt(10) - 5),
-                (int)(playerPos.z + Math.sin(angle) * distance)
-        );
+            // スポーン位置決定（プレイヤーの周囲20-40ブロック）
+            Vec3 playerPos = targetPlayer.position();
+            RandomSource random = level.getRandom();
+            double angle = random.nextDouble() * 2 * Math.PI;
+            double distance = 20 + random.nextDouble() * 20;
 
-        // 地面調整
-        spawnPos = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, spawnPos);
+            BlockPos spawnPos = new BlockPos(
+                    (int)(playerPos.x + Math.cos(angle) * distance),
+                    (int)(playerPos.y + random.nextInt(10) - 5),
+                    (int)(playerPos.z + Math.sin(angle) * distance)
+            );
 
-        TungSahurEntity entity = ModEntities.TUNG_SAHUR.get().create(level);
-        if (entity != null) {
-            entity.setPos(spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
-            entity.setDayNumber(day);
-            entity.setPersistenceRequired(); // デスポーン防止
+            // 地面調整
+            spawnPos = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, spawnPos);
 
-            level.addFreshEntity(entity);
-            dayEntities.put(day, entity);
+            // 新しいサフールをスポーン
+            TungSahurEntity entity = ModEntities.TUNG_SAHUR.get().create(level);
+            if (entity != null) {
+                entity.setPos(spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
+                entity.setDayNumber(day);
+                entity.setPersistenceRequired(); // デスポーン防止
 
-            TungSahurMod.LOGGER.info("Day {} TungSahur spawned near {} at {}", day, TARGET_PLAYER, spawnPos);
-        }
-    }
-    @SubscribeEvent
-    public static void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
-        if (!TARGET_PLAYER.equals(event.getEntity().getName().getString())) return;
-        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+                level.addFreshEntity(entity);
 
-        ServerLevel level = player.serverLevel();
-        GameStateManager gameState = GameStateManager.get(level);
+                // 現在のサフールとして記録
+                currentTungSahurEntity = entity;
+                currentTungSahurDay = day;
+                lastSpawnTime = System.currentTimeMillis();
 
-        if (gameState.isGameActive()) {
-            int currentDay = gameState.getCurrentDay();
-            if (currentDay > 0) {
-                // 1秒後にスポーン（リスポーン処理完了を待つ）
-                level.getServer().tell(new TickTask(20, () -> spawnKaraitukemenEntity(level, currentDay)));
+                TungSahurMod.LOGGER.info("★ SINGLE TungSahur spawned for Day {} near {} at {} ★", day, TARGET_PLAYER, spawnPos);
+            }
+        } finally {
+            // 必ずスポーンフラグを解除
+            synchronized (DayCounterEvents.class) {
+                isSpawning = false;
             }
         }
     }
+
     /**
-     * エンティティ死亡時処理
+     * 現在のサフールを削除
      */
-    @SubscribeEvent
-    public static void onEntityDeath(LivingDeathEvent event) {
-        if (!(event.getEntity() instanceof TungSahurEntity tungSahur)) return;
-        if (!(tungSahur.level() instanceof ServerLevel level)) return;
-
-        GameStateManager gameState = GameStateManager.get(level);
-        if (gameState.isGameActive()) {
-            int currentDay = gameState.getCurrentDay();
-            dayEntityKilled.put(currentDay, true);
-            dayEntities.remove(currentDay);
-
-            TungSahurMod.LOGGER.info("Day {} TungSahur killed - no more spawns today", currentDay);
+    private static void removeCurrentTungSahur() {
+        if (currentTungSahurEntity != null && currentTungSahurEntity.isAlive()) {
+            currentTungSahurEntity.discard();
+            TungSahurMod.LOGGER.info("Current TungSahur removed (Day {})", currentTungSahurDay);
         }
+        currentTungSahurEntity = null;
+        currentTungSahurDay = -1;
     }
+
     /**
-     * 全TungSahurエンティティを削除（強化版）
+     * 全TungSahurエンティティを強制削除
      */
-    private static void removeAllTungSahurEntities(ServerLevel level) {
-        // ワールドボーダーに基づくAABBを作成
+    private static void forceRemoveAllTungSahurEntities(ServerLevel level) {
         var worldBorder = level.getWorldBorder();
         var searchArea = new AABB(
                 worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
@@ -388,7 +436,95 @@ public class DayCounterEvents {
             entity.discard();
         }
 
-        TungSahurMod.LOGGER.info("{}体のTungSahurエンティティが平和に消失", entities.size());
+        if (entities.size() > 0) {
+            TungSahurMod.LOGGER.info("Forced removal of {} TungSahur entities", entities.size());
+        }
+    }
+
+    /**
+     * プレイヤー死亡時の処理
+     */
+    @SubscribeEvent
+    public static void onPlayerDeath(LivingDeathEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        if (!TARGET_PLAYER.equals(player.getName().getString())) return;
+
+        ServerLevel level = player.serverLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+
+        if (gameState.isGameActive()) {
+            TungSahurMod.LOGGER.info("Target player {} died - removing current TungSahur", TARGET_PLAYER);
+            removeCurrentTungSahur();
+        }
+    }
+
+    /**
+     * プレイヤーリスポーン時の処理（撃破状態チェック強化）
+     */
+    @SubscribeEvent
+    public static void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
+        if (!TARGET_PLAYER.equals(event.getEntity().getName().getString())) return;
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+
+        ServerLevel level = player.serverLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+
+        if (gameState.isGameActive()) {
+            int currentDay = gameState.getCurrentDay();
+            if (currentDay > 0) {
+                // ★重要★ その日のサフールが既に倒されている場合はリスポーンでもスポーンしない
+                if (dayEntityKilled.getOrDefault(currentDay, false)) {
+                    TungSahurMod.LOGGER.info("Target player {} respawned, but Day {} TungSahur already killed - NO RESPAWN", TARGET_PLAYER, currentDay);
+                    return;
+                }
+
+                // 現在のサフールがまだ生きている場合はスポーンしない
+                if (currentTungSahurEntity != null && currentTungSahurEntity.isAlive() && currentTungSahurDay == currentDay) {
+                    TungSahurMod.LOGGER.info("Target player {} respawned, but Day {} TungSahur still alive - NO DUPLICATE SPAWN", TARGET_PLAYER, currentDay);
+                    return;
+                }
+
+                TungSahurMod.LOGGER.info("Target player {} respawned - spawning new TungSahur for day {}", TARGET_PLAYER, currentDay);
+                // 2秒後にスポーン（リスポーン処理完了を待つ）
+                level.getServer().tell(new TickTask(40, () -> spawnSingleTungSahur(level, currentDay)));
+            }
+        }
+    }
+
+    /**
+     * サフール死亡時の処理（撃破フラグ設定強化）
+     */
+    @SubscribeEvent
+    public static void onEntityDeath(LivingDeathEvent event) {
+        if (!(event.getEntity() instanceof TungSahurEntity tungSahur)) return;
+        if (!(tungSahur.level() instanceof ServerLevel level)) return;
+
+        GameStateManager gameState = GameStateManager.get(level);
+        if (gameState.isGameActive()) {
+            int currentDay = gameState.getCurrentDay();
+
+            // 死亡したサフールが現在のサフールかチェック
+            if (tungSahur == currentTungSahurEntity) {
+                // ★重要★ その日の撃破フラグを設定（絶対にリスポーンしない）
+                dayEntityKilled.put(currentDay, true);
+                currentTungSahurEntity = null;
+                currentTungSahurDay = -1;
+
+                TungSahurMod.LOGGER.info("★★★ Day {} TungSahur KILLED - NO MORE SPAWNS TODAY ★★★", currentDay);
+                TungSahurMod.LOGGER.info("Next TungSahur will spawn only when Day {} begins", currentDay + 1);
+
+                // プレイヤーに勝利メッセージを送信
+                ServerPlayer targetPlayer = level.getServer().getPlayerList().getPlayerByName(TARGET_PLAYER);
+                if (targetPlayer != null) {
+                    Component victoryMessage = Component.literal("§a§l★ Tung Sahur撃破！ ★")
+                            .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD)
+                            .append("\n")
+                            .append(Component.literal("§7今夜はもうスポーンしません。")
+                                    .withStyle(ChatFormatting.GRAY));
+                    targetPlayer.sendSystemMessage(victoryMessage);
+                }
+            }
+        }
     }
 
     /**
@@ -467,11 +603,20 @@ public class DayCounterEvents {
     }
 
     /**
-     * デバッグ情報の取得（強化版）
+     * デバッグ情報の取得（強化版・撃破状態表示追加）
      */
     public static String getDebugInfo() {
-        return String.format("DayCounterEvents[lastGlobalDay=%d, gameEndSent=%s, endComplete=%s, initialized=%s, processing=%s]",
-                lastGlobalDay, gameEndNotificationSent, gameEndProcessingComplete, isGameInitialized, isProcessingGameProgression);
+        StringBuilder killStatus = new StringBuilder();
+        for (int day = 1; day <= 3; day++) {
+            if (dayEntityKilled.getOrDefault(day, false)) {
+                killStatus.append("Day").append(day).append(":KILLED ");
+            }
+        }
+
+        return String.format("DayCounterEvents[lastGlobalDay=%d, gameEndSent=%s, endComplete=%s, initialized=%s, processing=%s, currentEntity=%s, entityDay=%d, killFlags=%s, spawning=%s]",
+                lastGlobalDay, gameEndNotificationSent, gameEndProcessingComplete, isGameInitialized,
+                isProcessingGameProgression, (currentTungSahurEntity != null ? "alive" : "null"), currentTungSahurDay,
+                killStatus.toString().trim(), isSpawning);
     }
 
     // === 未実装メソッドのスタブ ===
@@ -498,23 +643,6 @@ public class DayCounterEvents {
         };
 
         return Component.literal("§l=== " + nightMessage + " ===").withStyle(color);
-    }
-
-    private static void updateAllTungSahurEntities(ServerLevel level, int newDay) {
-        // ワールドボーダーに基づくAABBを作成
-        var worldBorder = level.getWorldBorder();
-        var searchArea = new AABB(
-                worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
-                worldBorder.getMaxX(), level.getMaxBuildHeight(), worldBorder.getMaxZ()
-        );
-
-        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, searchArea);
-
-        for (TungSahurEntity entity : entities) {
-            entity.setDayNumber(newDay);
-        }
-
-        TungSahurMod.LOGGER.info("{}体のTungSahurエンティティを{}日目に更新", entities.size(), newDay);
     }
 
     private static void triggerDayChangeEffects(ServerLevel level, int dayNumber) {
