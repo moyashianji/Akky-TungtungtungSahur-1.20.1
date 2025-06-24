@@ -1,15 +1,8 @@
-// JumpscarePacket.java - ジャンプスケア実行パケット
+// JumpscarePacket.java - ジャンプスケア実行パケット（dist分離対応版）
 package com.tungsahur.mod.network;
 
 import com.tungsahur.mod.TungSahurMod;
-import com.tungsahur.mod.client.overlay.TungSahurJumpscareOverlay;
-import com.tungsahur.mod.entity.ModEntities;
-import com.tungsahur.mod.entity.TungSahurEntity;
-import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.world.entity.player.Player;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
@@ -58,44 +51,19 @@ public class JumpscarePacket {
     }
 
     /**
-     * パケット受信時の処理（クライアントサイド）
+     * パケット受信時の処理（クライアントサイド） - static メソッドで dist分離対応
      */
-    @OnlyIn(Dist.CLIENT)
-    public void handle(Supplier<NetworkEvent.Context> context) {
+    public static void handle(JumpscarePacket packet, Supplier<NetworkEvent.Context> context) {
         NetworkEvent.Context ctx = context.get();
 
         // メインスレッドで実行
         ctx.enqueueWork(() -> {
             try {
                 TungSahurMod.LOGGER.info("=== JumpscarePacket受信 ===");
-                TungSahurMod.LOGGER.info("プレイヤー位置: ({}, {}, {})", playerX, playerY, playerZ);
+                TungSahurMod.LOGGER.info("プレイヤー位置: ({}, {}, {})", packet.playerX, packet.playerY, packet.playerZ);
 
-                Minecraft minecraft = Minecraft.getInstance();
-                Player clientPlayer = minecraft.player;
-
-                if (clientPlayer != null && clientPlayer.level() != null) {
-                    // TungSahurエンティティをクライアントで一時的に作成
-                    TungSahurEntity tungSahur = ModEntities.TUNG_SAHUR.get().create(clientPlayer.level());
-
-                    if (tungSahur != null) {
-                        // エンティティの位置と向きを設定
-                        tungSahur.setPos(playerX, playerY, playerZ);
-                        tungSahur.setYRot(playerYRot);
-                        tungSahur.setXRot(0.0F);
-
-                        TungSahurMod.LOGGER.info("TungSahurエンティティ作成成功: {}", tungSahur);
-                        TungSahurMod.LOGGER.info("エンティティ位置: ({}, {}, {})", tungSahur.getX(), tungSahur.getY(), tungSahur.getZ());
-
-                        // ジャンプスケア開始
-                        TungSahurJumpscareOverlay.startJumpscare(tungSahur);
-
-                        TungSahurMod.LOGGER.info("ジャンプスケア開始完了");
-                    } else {
-                        TungSahurMod.LOGGER.error("TungSahurエンティティの作成に失敗");
-                    }
-                } else {
-                    TungSahurMod.LOGGER.error("クライアントプレイヤーまたはワールドがnull");
-                }
+                // クライアントサイドの処理を別クラスに分離
+                ClientPacketHandler.handleJumpscarePacket(packet.playerX, packet.playerY, packet.playerZ, packet.playerYRot);
 
             } catch (Exception e) {
                 TungSahurMod.LOGGER.error("JumpscarePacket処理中にエラー: ", e);

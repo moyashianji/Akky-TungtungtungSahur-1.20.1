@@ -28,7 +28,7 @@ public class NetworkHandler {
     public static void registerPackets() {
         TungSahurMod.LOGGER.info("TungSahur ネットワークパケット登録開始");
 
-        // JumpscarePacketを登録
+        // JumpscarePacketを登録 - handleメソッドの参照方法を修正
         INSTANCE.messageBuilder(JumpscarePacket.class, packetId++, NetworkDirection.PLAY_TO_CLIENT)
                 .decoder(JumpscarePacket::decode)
                 .encoder(JumpscarePacket::encode)
