@@ -13,6 +13,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
@@ -30,6 +31,7 @@ import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.ai.navigation.WallClimberNavigation;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -41,6 +43,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.registries.ForgeRegistries;
 import software.bernie.geckolib.animatable.GeoEntity;
 import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
 import software.bernie.geckolib.core.animation.*;
@@ -112,8 +115,15 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     private int nextThrowTime = 0;
     private int nextJumpTime = 0;
+    // 死亡アニメーション制御用の新しいデータアクセサー
+    private static final EntityDataAccessor<Boolean> IS_DEATH_ANIMATION_PLAYING = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Boolean> DEATH_ANIMATION_COMPLETED = SynchedEntityData.defineId(TungSahurEntity.class, EntityDataSerializers.BOOLEAN);
 
-    // GeckoLib
+    // 死亡アニメーション制御用変数
+    private int deathAnimationTimer = 0;
+    private static final int DEATH_ANIMATION_LENGTH = 40; // 2秒（40tick）
+    private boolean deathAnimationStarted = false; // 名前変更: deathStarted → deathAnimationStarted
+
     private final AnimatableInstanceCache cache = GeckoLibUtil.createInstanceCache(this);
 
     public TungSahurEntity(EntityType<? extends Monster> entityType, Level level) {
@@ -139,7 +149,46 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.entityData.define(IS_CURRENTLY_JUMPING, false);
         this.entityData.define(IS_SPRINTING, false);
         this.entityData.define(CLIMBING_FLAGS, (byte)0);
+        // 死亡アニメーション用データ定義
+        this.entityData.define(IS_DEATH_ANIMATION_PLAYING, false);
+        this.entityData.define(DEATH_ANIMATION_COMPLETED, false);
 
+    }
+
+    @Override
+    public void die(DamageSource damageSource) {
+        // 死亡アニメーションがまだ開始されていない場合
+        if (!deathAnimationStarted) {
+            deathAnimationStarted = true;
+            this.setIsDeathAnimationPlaying(true);
+
+            // 移動停止とAI停止
+            this.getNavigation().stop();
+            this.setDeltaMovement(Vec3.ZERO);
+            this.goalSelector.removeAllGoals(goal -> true); // 全てのGoalを削除
+            this.targetSelector.removeAllGoals(goal -> true); // 全てのTargetGoalを削除
+
+            TungSahurMod.LOGGER.debug("★死亡アニメーション開始★ - HP=1に設定して実際の死亡を遅延");
+
+            // HPを1に設定して即死を防ぐ（重要！）
+            this.setHealth(1.0F);
+            return; // ここで終了、super.die()は呼ばない
+        }
+
+        // 死亡アニメーションが完了している場合のみ実際の死亡処理
+        if (deathAnimationTimer >= DEATH_ANIMATION_LENGTH) {
+            TungSahurMod.LOGGER.debug("★死亡アニメーション完了 - 実際の死亡処理実行★");
+            if (this.level() instanceof ServerLevel _level) {
+                ItemEntity entityToSpawn = new ItemEntity(_level, this.getX(), this.getY(), this.getZ(), new ItemStack(ModItems.TUNG_SAHUR_BAT.get()));
+                entityToSpawn.setPickUpDelay(10);
+                _level.addFreshEntity(entityToSpawn);
+            }
+
+            // 強制的にエンティティを削除
+            this.setIsDeathAnimationPlaying(false);
+            this.discard(); // remove()ではなくdiscard()を使用
+            return; // super.die()は呼ばない（無限ループ防止）
+        }
     }
     @Override
     protected PathNavigation createNavigation(Level level) {
@@ -147,23 +196,76 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     }
     @Override
     public void tick() {
+        // ★★★ 死亡アニメーション中の特別処理 ★★★
+        if (deathAnimationStarted && deathAnimationTimer < DEATH_ANIMATION_LENGTH) {
+            deathAnimationTimer++;
+
+            // 移動を完全停止
+            this.setDeltaMovement(Vec3.ZERO);
+
+            // 基本的なエンティティ更新のみ実行
+            this.baseTick();
+
+            // アニメーション完了チェック
+            if (deathAnimationTimer >= DEATH_ANIMATION_LENGTH) {
+                TungSahurMod.LOGGER.debug("★死亡アニメーション完了 - 次のtickで実際の死亡処理★");
+                this.setIsDeathAnimationPlaying(false);
+
+                // 実際の死亡処理を実行
+                this.die(this.getLastDamageSource() != null ? this.getLastDamageSource() : this.damageSources().generic());
+            }
+
+            return; // 他の処理をスキップ
+        }
+
+        // 通常のtick処理（既存のコードはそのまま）
         super.tick();
 
-        // アタックアニメーション完了チェック
+        // アタックアニメーション完了チェック（クールダウンなし版）
         if (isAttackAnimationPlaying && !isCurrentlyAttacking()) {
             isAttackAnimationPlaying = false;
-            attackAnimationCooldown = 10;
+            TungSahurMod.LOGGER.debug("攻撃アニメーション完了 - 即座に次回攻撃可能");
         }
 
-        // バット装備を毎tick確認（レンダリング前に確実に装備）
         if (!this.level().isClientSide) {
             ensureBatEquipped();
-            // 蜘蛛と全く同じ: 水平衝突時に壁登り状態に設定
             this.setClimbing(this.horizontalCollision);
+
+            // 攻撃状況デバッグ（3秒間隔）
+            if (this.tickCount % 60 == 0) { // 3秒ごと
+                LivingEntity target = this.getTarget();
+                if (target != null) {
+                    double distance = this.distanceTo(target);
+                }
+            }
+
+            // クールダウン完了時の特別ログ
+            if (this.attackCooldown == 1) { // 次のtickで0になる
+                TungSahurMod.LOGGER.debug("★攻撃クールダウン完了予告★ - 次回攻撃可能");
+            }
         }
     }
+    @Override
+    public void remove(RemovalReason reason) {
+        // 死亡による削除の場合、アニメーション完了まで待機
+        if (reason == RemovalReason.KILLED && this.deathAnimationTimer < DEATH_ANIMATION_LENGTH) {
+            return; // 削除を阻止
+        }
+        super.remove(reason);
+    }
+    /**
+     * ★攻撃アニメーションを強制的にリセット（新規追加）★
+     */
+    public void forceResetAttackAnimation() {
+        // アニメーション制御フラグをリセット
+        this.isAttackAnimationPlaying = false;
+        this.attackAnimationCooldown = 0; // クールダウンも削除
 
+        // 攻撃状態をいったんリセット（新しいアニメーション開始のため）
+        this.setCurrentlyAttacking(false);
 
+        TungSahurMod.LOGGER.debug("★攻撃アニメーション強制リセット★ - 新しいアニメーション準備完了");
+    }
     /**
      * バットが装備されていることを確実にする
      */
@@ -214,7 +316,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         this.goalSelector.addGoal(1, new TungSahurSpiderClimbGoal(this));
 
         // 近接攻撃（壁登り中でない場合のみ）
-        this.goalSelector.addGoal(2, new MeleeAttackGoal(this, 1.0D, false) {
+        this.goalSelector.addGoal(2, new TungSahurMeleeAttackGoal(this, 1.0D, false) {
             @Override
             public boolean canUse() {
                 if (TungSahurEntity.this.isWallClimbing()) return false;
@@ -264,19 +366,38 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     // === 大幅弱体化した属性設定 ===
     public static AttributeSupplier.Builder createAttributes() {
         return Monster.createMonsterAttributes()
-                .add(Attributes.MAX_HEALTH, 20.0D) // 30.0D → 20.0D に削減
-                .add(Attributes.MOVEMENT_SPEED, 0.25D)
-                .add(Attributes.ATTACK_DAMAGE, 2.0D) // 4.0D → 2.0D に大幅削減
-                .add(Attributes.FOLLOW_RANGE, 32.0D)
-                .add(Attributes.ARMOR, 0.5D) // 1.0D → 0.5D に削減
-                .add(Attributes.KNOCKBACK_RESISTANCE, 0.1D); // 0.2D → 0.1D に削減
+                .add(Attributes.MAX_HEALTH, 150.0D) // 20.0D → 150.0D
+                .add(Attributes.MOVEMENT_SPEED, 0.35D) // 0.25D → 0.35D
+                .add(Attributes.ATTACK_DAMAGE, 12.0D) // 2.0D → 12.0D
+                .add(Attributes.FOLLOW_RANGE, 64.0D) // 32.0D → 64.0D
+                .add(Attributes.ARMOR, 6.0D) // 0.5D → 6.0D
+                .add(Attributes.KNOCKBACK_RESISTANCE, 0.8D); // 0.1D → 0.8D
     }
 
 
+    /**
+     * ★攻撃クールダウン設定メソッド（新規追加）★
+     */
+    public void setAttackCooldown(int ticks) {
+        this.attackCooldown = ticks;
+        TungSahurMod.LOGGER.debug("攻撃クールダウン設定: {}tick ({}秒)", ticks, ticks / 20.0F);
+    }
+
+    /**
+     * ★攻撃クールダウン取得メソッド（新規追加）★
+     */
+    public int getAttackCooldown() {
+        return this.attackCooldown;
+    }
 
 
     @Override
     public void aiStep() {
+        if (deathAnimationStarted) {
+            this.baseTick();
+            return;
+        }
+
         // 壁登り中の特別処理
         if (this.isWallClimbing()) {
             // 落下ダメージ無効化
@@ -308,12 +429,18 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     }
 
 
-    /**
-     * 全タイマーの更新
-     */
     private void updateAllTimers() {
-        // 基本タイマー
-        if (this.attackCooldown > 0) this.attackCooldown--;
+        // 攻撃クールダウンを最優先で減算
+        if (this.attackCooldown > 0) {
+            this.attackCooldown--;
+
+            // クールダウン完了時のログ
+            if (this.attackCooldown == 0) {
+                TungSahurMod.LOGGER.debug("攻撃クールダウン完了 - 再攻撃可能");
+            }
+        }
+
+        // 他のタイマー
         this.throwTimer++;
         this.jumpTimer++;
         if (this.watchCheckCooldown > 0) this.watchCheckCooldown--;
@@ -322,7 +449,6 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         if (this.isExecutingThrow) {
             handleThrowExecution();
         } else if (isCurrentlyThrowing()) {
-            // 投擲アニメーション状態を適切にリセット
             setCurrentlyThrowing(false);
         }
 
@@ -330,16 +456,17 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         if (this.isExecutingJump) {
             handleJumpExecution();
         } else if (isCurrentlyJumping()) {
-            // ジャンプアニメーション状態を適切にリセット
             setCurrentlyJumping(false);
         }
 
-        // 近接攻撃アニメーション状態の管理
-        if (isCurrentlyAttacking() && this.attackCooldown <= 0 && !this.isExecutingThrow && !this.isExecutingJump) {
-            setCurrentlyAttacking(false);
+        // 攻撃アニメーション状態の安全リセット（10秒後）
+        if (isCurrentlyAttacking()) {
+            if (this.tickCount % 200 == 0) { // 10秒ごとにチェック
+                TungSahurMod.LOGGER.debug("攻撃状態の安全リセット実行");
+                setCurrentlyAttacking(false);
+            }
         }
     }
-
     /**
      * 特殊攻撃の管理
      */
@@ -567,7 +694,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
                     x, this.getY() + 0.1, z, 1, 0.05, 0.05, 0.05, 0.05);
         }
 
-        // 範囲ダメージ（さらに弱体化）
+        // 範囲ダメージ（ダメージ強化版）
         AABB damageArea = new AABB(this.blockPosition()).inflate(2.0); // 3.0 → 2.0
         List<Entity> nearbyEntities = serverLevel.getEntities(this, damageArea);
 
@@ -575,13 +702,26 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             if (entity instanceof LivingEntity living && entity != this) {
                 double distance = this.distanceTo(living);
                 if (distance <= 2.0) { // 3.0 → 2.0
-                    // プレイヤーには非常に軽いダメージ
+                    // 日数に応じたダメージ強化
                     float damage;
                     if (living instanceof Player) {
-                        damage = 1.0F; // プレイヤーには固定1ダメージ
+                        // プレイヤーへのダメージを日数に応じて大幅増加
+                        damage = switch (getDayNumber()) {
+                            case 1 -> 8.0F;   // 1日目: 8ダメージ (1.0F→8.0F)
+                            case 2 -> 12.0F;  // 2日目: 12ダメージ
+                            case 3 -> 16.0F;  // 3日目: 16ダメージ
+                            default -> 6.0F;
+                        };
                     } else {
-                        damage = (float) (1.5D * (1.0D - distance / 2.0D)); // 3.0D → 1.5D
-                        damage = Math.max(damage, 0.5F); // 1.0F → 0.5F
+                        // その他エンティティへのダメージも強化
+                        float baseDamage = switch (getDayNumber()) {
+                            case 1 -> 10.0F;  // 1日目: 10ダメージ
+                            case 2 -> 15.0F;  // 2日目: 15ダメージ
+                            case 3 -> 20.0F;  // 3日目: 20ダメージ
+                            default -> 8.0F;
+                        };
+                        damage = (float) (baseDamage * (1.0D - distance / 2.0D));
+                        damage = Math.max(damage, 4.0F); // 最低4ダメージ (2.0F→4.0F)
                     }
 
                     living.hurt(this.damageSources().mobAttack(this), damage);
@@ -623,85 +763,10 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         TungSahurMod.LOGGER.debug("投擲実行完了");
     }
 
-    /**
-     * 近接攻撃の実行（完全修正版）
-     */
-    public void performMeleeAttack(LivingEntity target) {
-        this.setCurrentlyAttacking(true);
 
-        // 基本攻撃のみ実行（追加ダメージなし）
-        boolean hitSuccessful = this.doHurtTarget(target);
 
-        if (hitSuccessful) {
-            // 追加ダメージを完全削除
-            // float additionalDamage = this.getDayNumber() * 0.5F; // この行を削除
 
-            // プレイヤーには非常に軽いノックバック、他エンティティには通常ノックバック
-            Vec3 direction = target.position().subtract(this.position()).normalize();
-            double knockbackStrength;
-            double verticalKnockback;
 
-            if (target instanceof Player) {
-                // プレイヤーには非常に軽いノックバック
-                knockbackStrength = 0.08D; // 大幅に削減
-                verticalKnockback = 0.03D; // 大幅に削減
-            } else {
-                // プレイヤー以外には通常のノックバック
-                knockbackStrength = 0.12D + (this.getDayNumber() * 0.03D); // それでも削減
-                verticalKnockback = 0.06D;
-            }
-
-            target.setDeltaMovement(target.getDeltaMovement().add(
-                    direction.x * knockbackStrength, verticalKnockback, direction.z * knockbackStrength));
-
-            // 攻撃エフェクト
-            spawnMeleeAttackEffects();
-
-            TungSahurMod.LOGGER.debug("近接攻撃成功: 基本ダメージのみ");
-        }
-
-        // クールダウン設定（延長）
-        this.attackCooldown = switch (this.getDayNumber()) {
-            case 1 -> 40; // 30 → 40 (2秒)
-            case 2 -> 35; // 25 → 35 (1.75秒)
-            case 3 -> 30; // 20 → 30 (1.5秒)
-            default -> 40;
-        };
-
-        // 攻撃状態を少し後にリセット
-        this.level().scheduleTick(this.blockPosition(),
-                this.level().getBlockState(this.blockPosition()).getBlock(), 15);
-    }
-
-    /**
-     * 近接攻撃エフェクト
-     */
-    private void spawnMeleeAttackEffects() {
-        // バットスイング音
-        SoundEvent swingSound = switch (this.getDayNumber()) {
-            case 1 -> SoundEvents.PLAYER_ATTACK_SWEEP;
-            case 2 -> SoundEvents.PLAYER_ATTACK_STRONG;
-            case 3 -> SoundEvents.PLAYER_ATTACK_CRIT;
-            default -> SoundEvents.PLAYER_ATTACK_SWEEP;
-        };
-
-        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
-                swingSound, SoundSource.HOSTILE, 0.9F, 0.8F + (this.getDayNumber() * 0.1F));
-
-        // スイングパーティクル
-        if (this.level() instanceof ServerLevel serverLevel) {
-            Vec3 pos = this.position().add(0, this.getBbHeight() * 0.7, 0);
-
-            for (int i = 0; i < 3 + this.getDayNumber(); i++) {
-                double x = pos.x + (this.random.nextDouble() - 0.5) * 2.0;
-                double y = pos.y + (this.random.nextDouble() - 0.5) * 0.5;
-                double z = pos.z + (this.random.nextDouble() - 0.5) * 2.0;
-
-                serverLevel.sendParticles(ParticleTypes.SWEEP_ATTACK,
-                        x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
-            }
-        }
-    }
 
     /**
      * 攻撃停止処理
@@ -750,7 +815,20 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     // === 攻撃可能チェック ===
     public boolean canAttack() {
-        return this.attackCooldown <= 0 && !this.isExecutingThrow && !this.isExecutingJump;
+        boolean cooldownOK = this.attackCooldown <= 0;
+        boolean notThrowingOK = !this.isExecutingThrow;
+        boolean notJumpingOK = !this.isExecutingJump;
+        boolean notClimbingOK = !this.isWallClimbing(); // 壁登り中は攻撃不可
+
+        boolean result = cooldownOK && notThrowingOK && notJumpingOK && notClimbingOK;
+
+        // デバッグログ（攻撃不可時のみ）
+        if (!result && this.tickCount % 20 == 0) { // 1秒間隔でログ
+            TungSahurMod.LOGGER.debug("canAttack=false: クールダウン={}, 投擲中={}, ジャンプ中={}, 壁登り中={}",
+                    this.attackCooldown, this.isExecutingThrow, this.isExecutingJump, this.isWallClimbing());
+        }
+
+        return result;
     }
 
     // === 既存のシステム（監視、スプリント等）===
@@ -886,59 +964,80 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private boolean isAttackAnimationPlaying = false;
     private int attackAnimationCooldown = 0;
 
-    // 3. predicateメソッドを以下に完全に置き換え
+    /**
+     * ★★★ 死亡アニメーション対応版 predicate ★★★
+     */
     private PlayState predicate(AnimationState<TungSahurEntity> animationState) {
-        // アタックアニメーションのクールダウンを減らす
-        if (attackAnimationCooldown > 0) {
-            attackAnimationCooldown--;
-        }
-
         // 現在再生中のアニメーションをチェック
         String currentAnimName = animationState.getController().getCurrentAnimation() != null
                 ? animationState.getController().getCurrentAnimation().animation().name() : "";
 
-        // アタックアニメーションが完了したかチェック
-        if (isAttackAnimationPlaying && !currentAnimName.equals("attack")) {
-            isAttackAnimationPlaying = false;
-            attackAnimationCooldown = 10; // 10tick（0.5秒）のクールダウン
+        // ★★★ 最優先: 死亡アニメーション ★★★
+        if (this.isDeathAnimationPlaying()) {
+            if (!currentAnimName.equals("death")) {
+                TungSahurMod.LOGGER.debug("死亡アニメーション開始");
+                animationState.getController().forceAnimationReset();
+                animationState.getController().setAnimation(DEATH_ANIM);
+            }
+            return PlayState.CONTINUE;
         }
 
-        // 優先度の高いアニメーションが再生中の場合、完了まで継続
-        if (currentAnimName.equals("death") ||
-                currentAnimName.equals("attack") ||
-                currentAnimName.equals("shoot_attack") ||
-                currentAnimName.equals("jump_attack")) {
-            // アニメーションが完了していない場合は継続
-            if (!animationState.getController().getAnimationState().equals(AnimationController.State.STOPPED)) {
+        // ★アタックアニメーション完了チェック★
+        if (isAttackAnimationPlaying) {
+            // アニメーションコントローラーの状態をチェック
+            AnimationController.State controllerState = animationState.getController().getAnimationState();
+
+            // アニメーションが停止状態になった場合のみ完了とみなす
+            if (controllerState.equals(AnimationController.State.STOPPED) || !currentAnimName.equals("attack")) {
+                isAttackAnimationPlaying = false;
+                setCurrentlyAttacking(false); // 攻撃状態をリセット
+                TungSahurMod.LOGGER.debug("attackアニメーション完了 - 攻撃状態リセット");
+            } else {
+                // まだ再生中は継続
                 return PlayState.CONTINUE;
             }
         }
 
-        // 死亡アニメーション
-        if (this.isDeadOrDying()) {
-            if (!currentAnimName.equals("death")) {
-                animationState.getController().forceAnimationReset();
-            }
-            animationState.getController().setAnimation(DEATH_ANIM);
-            return PlayState.CONTINUE;
-        }
-
-        // アタックアニメーション - 連続実行制御付き
-        if (isCurrentlyAttacking() && !isAttackAnimationPlaying && attackAnimationCooldown <= 0) {
-            if (!currentAnimName.equals("attack")) {
-                animationState.getController().forceAnimationReset();
-            }
+        // ★重要: 攻撃アニメーション開始判定（クールダウン削除）★
+        if (isCurrentlyAttacking() && !isAttackAnimationPlaying) {
+            // ★毎回強制的にアニメーションを再開★
+            TungSahurMod.LOGGER.debug("★攻撃アニメーション強制開始★");
+            animationState.getController().forceAnimationReset();
             animationState.getController().setAnimation(ATTACK_ANIM);
             isAttackAnimationPlaying = true;
             return PlayState.CONTINUE;
         }
 
-        // アタックアニメーション再生中は他のアニメーションをブロック
+        // ★アタックアニメーション再生中は他を完全にブロック★
         if (isAttackAnimationPlaying) {
             return PlayState.CONTINUE;
         }
 
-        // シュートアタックアニメーション
+        // ★その他の特殊アニメーション★
+        // 投擲アニメーション完了チェック
+        if (currentAnimName.equals("shoot_attack")) {
+            AnimationController.State controllerState = animationState.getController().getAnimationState();
+            if (controllerState.equals(AnimationController.State.STOPPED)) {
+                setCurrentlyThrowing(false);
+                TungSahurMod.LOGGER.debug("投擲アニメーション完了");
+            } else {
+                return PlayState.CONTINUE;
+            }
+        }
+
+        // ジャンプアニメーション完了チェック
+        if (currentAnimName.equals("jump_attack")) {
+            AnimationController.State controllerState = animationState.getController().getAnimationState();
+            if (controllerState.equals(AnimationController.State.STOPPED)) {
+                setCurrentlyJumping(false);
+                TungSahurMod.LOGGER.debug("ジャンプアニメーション完了");
+            } else {
+                return PlayState.CONTINUE;
+            }
+        }
+
+        // ★新しいアニメーション開始判定★
+        // 投擲アニメーション
         if (isCurrentlyThrowing()) {
             if (!currentAnimName.equals("shoot_attack")) {
                 animationState.getController().forceAnimationReset();
@@ -947,7 +1046,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             return PlayState.CONTINUE;
         }
 
-        // ジャンプアタックアニメーション
+        // ジャンプアニメーション
         if (isCurrentlyJumping()) {
             if (!currentAnimName.equals("jump_attack")) {
                 animationState.getController().forceAnimationReset();
@@ -956,6 +1055,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
             return PlayState.CONTINUE;
         }
 
+        // ★通常のアニメーション★
         // 壁登りアニメーション
         if (isWallClimbing()) {
             animationState.getController().setAnimation(CLIMBING_ANIM);
@@ -993,7 +1093,7 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
         animationState.getController().setAnimation(idleAnim);
         return PlayState.CONTINUE;
-    }    @Override
+    }
     public AnimatableInstanceCache getAnimatableInstanceCache() {
         return cache;
     }
@@ -1018,16 +1118,16 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     private void updateAttributesForDay(int day) {
         switch (day) {
             case 1:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(20.0D); // 30.0D → 20.0D
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(2.0D); // 4.0D → 2.0D
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(100.0D); // 30.0D → 20.0D
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(4.0D); // 4.0D → 2.0D
                 break;
             case 2:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(25.0D); // 40.0D → 25.0D
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(2.5D); // 5.0D → 2.5D
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(150.0D); // 40.0D → 25.0D
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(5.5D); // 5.0D → 2.5D
                 break;
             case 3:
-                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(30.0D); // 50.0D → 30.0D
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(3.0D); // 6.0D → 3.0D
+                this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(200.0D); // 50.0D → 30.0D
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(6.0D); // 6.0D → 3.0D
                 break;
         }
         this.setHealth(this.getMaxHealth());
@@ -1080,7 +1180,14 @@ public class TungSahurEntity extends Monster implements GeoEntity {
     public void setCurrentlyJumping(boolean jumping) {
         this.entityData.set(IS_CURRENTLY_JUMPING, jumping);
     }
-
+    public boolean isDeathAnimationPlaying() {
+        return this.entityData.get(IS_DEATH_ANIMATION_PLAYING);
+    }
+    public void setIsDeathAnimationPlaying(boolean playing) {
+        this.entityData.set(IS_DEATH_ANIMATION_PLAYING, playing);
+    }
+    public boolean isDeathAnimationCompleted() { return this.entityData.get(DEATH_ANIMATION_COMPLETED); }
+    public void setDeathAnimationCompleted(boolean completed) { this.entityData.set(DEATH_ANIMATION_COMPLETED, completed); }
     @Override
     public boolean isSprinting() {
         return this.entityData.get(IS_SPRINTING);
@@ -1109,6 +1216,11 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         tag.putInt("JumpTimer", jumpTimer);
         tag.putInt("NextThrowTime", nextThrowTime);
         tag.putInt("NextJumpTime", nextJumpTime);
+
+        // ★★★ 死亡アニメーション状態も読み込み ★★★
+        tag.putBoolean("DeathAnimationStarted", deathAnimationStarted); // 名前変更
+        tag.putInt("DeathAnimationTimer", deathAnimationTimer);
+
     }
 
     @Override
@@ -1121,12 +1233,16 @@ public class TungSahurEntity extends Monster implements GeoEntity {
         jumpTimer = tag.getInt("JumpTimer");
         nextThrowTime = tag.getInt("NextThrowTime");
         nextJumpTime = tag.getInt("NextJumpTime");
+
+        deathAnimationStarted = tag.getBoolean("DeathAnimationStarted"); // 名前変更
+        deathAnimationTimer = tag.getInt("DeathAnimationTimer");
     }
 
     @Override
-    protected SoundEvent getAmbientSound() {
-        return SoundEvents.ENDERMAN_AMBIENT;
+    public SoundEvent getAmbientSound() {
+        return ForgeRegistries.SOUND_EVENTS.getValue(new ResourceLocation("tungsahurmod:tungtungsahur"));
     }
+
 
     @Override
     protected SoundEvent getHurtSound(DamageSource damageSource) {
@@ -1180,9 +1296,16 @@ public class TungSahurEntity extends Monster implements GeoEntity {
 
     @Override
     public boolean hurt(DamageSource damageSource, float amount) {
+        // 死亡アニメーション中はダメージを受けない
+        if (deathAnimationStarted) {
+            TungSahurMod.LOGGER.debug("死亡アニメーション中 - ダメージ無効");
+            return false;
+        }
+
         if (isBeingWatched()) {
             amount *= 1.3F;
         }
+
         return super.hurt(damageSource, amount);
     }
 

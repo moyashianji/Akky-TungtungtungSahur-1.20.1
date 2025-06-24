@@ -1,4 +1,4 @@
-// TungSahurMeleeAttackGoal.java - 完璧な近接攻撃
+// TungSahurMeleeAttackGoal.java - 強制アニメーション再生版
 package com.tungsahur.mod.entity.goals;
 
 import com.tungsahur.mod.TungSahurMod;
@@ -16,6 +16,10 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
     private final TungSahurEntity tungSahur;
     private int attackPreparationTime = 0;
     private boolean isPreparingAttack = false;
+    private LivingEntity pendingTarget = null;
+
+    // 攻撃クールダウン管理
+    private static final int ATTACK_COOLDOWN_TICKS = 20; // 1秒 = 20tick
 
     public TungSahurMeleeAttackGoal(TungSahurEntity tungSahur, double speedModifier, boolean followingTargetEvenIfNotSeen) {
         super(tungSahur, speedModifier, followingTargetEvenIfNotSeen);
@@ -32,11 +36,11 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
 
         double distance = tungSahur.distanceTo(target);
 
-        // 日数に応じた攻撃距離（バットの長いリーチ）
+        // 日数に応じた攻撃距離
         double maxAttackDistance = switch (tungSahur.getDayNumber()) {
-            case 1 -> 3.5D; // 1日目: 3.5ブロック
-            case 2 -> 4.0D; // 2日目: 4ブロック
-            case 3 -> 4.5D; // 3日目: 4.5ブロック
+            case 1 -> 3.5D;
+            case 2 -> 4.0D;
+            case 3 -> 4.5D;
             default -> 3.5D;
         };
 
@@ -55,67 +59,85 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
         if (target == null) return false;
 
         double distance = tungSahur.distanceTo(target);
-        return distance <= 5.0D; // 継続可能距離
+        double maxDistance = switch (tungSahur.getDayNumber()) {
+            case 1 -> 4.0D;
+            case 2 -> 4.5D;
+            case 3 -> 5.0D;
+            default -> 4.0D;
+        };
+
+        return distance <= maxDistance;
     }
 
     @Override
-    protected void checkAndPerformAttack(LivingEntity target, double distToTargetSqr) {
-        double attackReachSqr = this.getAttackReachSqr(target);
+    public void start() {
+        super.start();
+        TungSahurMod.LOGGER.debug("近接攻撃Goal開始");
+    }
 
-        if (distToTargetSqr <= attackReachSqr && this.isTimeToAttack()) {
-            performEnhancedAttack(target);
+    /**
+     * ★修正: 攻撃実行処理（強制アニメーション版）★
+     */
+    @Override
+    protected void checkAndPerformAttack(LivingEntity target, double distanceSqr) {
+        double attackReach = this.getAttackReachSqr(target);
+
+        if (distanceSqr <= attackReach && this.isTimeToAttack()) {
+            TungSahurMod.LOGGER.debug("★攻撃実行開始★: 距離²={}, 射程²={}", distanceSqr, attackReach);
+
+            // ★重要: 既存のアニメーション状態を完全にリセット★
+            tungSahur.forceResetAttackAnimation();
+
+            // ★攻撃アニメーション開始★
+            tungSahur.setCurrentlyAttacking(true);
+
+            // 攻撃準備開始
+            isPreparingAttack = true;
+            pendingTarget = target;
+            attackPreparationTime = switch (tungSahur.getDayNumber()) {
+                case 1 -> 10; // 0.5秒
+                case 2 -> 8;  // 0.4秒
+                case 3 -> 5;  // 0.25秒
+                default -> 10;
+            };
+
+            // 攻撃クールダウンを即座に設定
+            tungSahur.setAttackCooldown(ATTACK_COOLDOWN_TICKS);
+
+            TungSahurMod.LOGGER.debug("★攻撃開始★: 準備時間={}tick, クールダウン={}tick",
+                    attackPreparationTime, ATTACK_COOLDOWN_TICKS);
         }
     }
 
     /**
-     * 強化された攻撃実行
+     * 実際のダメージ処理
      */
-    private void performEnhancedAttack(LivingEntity target) {
-        if (!tungSahur.canAttack()) return;
+    private void executeDamage(LivingEntity target) {
+        if (target == null || !target.isAlive()) {
+            TungSahurMod.LOGGER.debug("攻撃対象が無効");
+            return;
+        }
 
-        // 攻撃準備開始
-        isPreparingAttack = true;
-        attackPreparationTime = switch (tungSahur.getDayNumber()) {
-            case 1 -> 10; // 0.5秒
-            case 2 -> 8;  // 0.4秒
-            case 3 -> 5;  // 0.25秒
-            default -> 10;
-        };
+        TungSahurMod.LOGGER.debug("ダメージ実行: ターゲット={}", target.getClass().getSimpleName());
 
-        tungSahur.setCurrentlyAttacking(true);
-
-        // 実際の攻撃実行
-        executeAttack(target);
-    }
-
-    private void executeAttack(LivingEntity target) {
         // 基本攻撃実行
         boolean hitSuccessful = tungSahur.doHurtTarget(target);
 
         if (hitSuccessful) {
-            // 日数に応じた追加ダメージ
+            // 追加ダメージ
             float additionalDamage = tungSahur.getDayNumber() * 1.5F;
-            target.hurt(tungSahur.damageSources().mobAttack(tungSahur), additionalDamage);
+            boolean additionalHit = target.hurt(tungSahur.damageSources().mobAttack(tungSahur), additionalDamage);
 
-            // 日数に応じた特殊効果
+            TungSahurMod.LOGGER.debug("攻撃成功: 基本攻撃={}, 追加ダメージ={}({})",
+                    hitSuccessful, additionalDamage, additionalHit);
+
+            // 特殊効果適用
             applyDaySpecificEffects(target);
-
-            // ノックバック効果
             applyKnockback(target);
-
-            // パーティクルとサウンド
             spawnAttackEffects();
-
-
-
-
-            TungSahurMod.LOGGER.debug("TungSahur近接攻撃成功: Day={}, ダメージ追加={}",
-                    tungSahur.getDayNumber(), additionalDamage);
+        } else {
+            TungSahurMod.LOGGER.debug("攻撃失敗");
         }
-
-        // 攻撃完了
-        isPreparingAttack = false;
-        tungSahur.setCurrentlyAttacking(false);
     }
 
     /**
@@ -124,10 +146,10 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
     private void applyDaySpecificEffects(LivingEntity target) {
         switch (tungSahur.getDayNumber()) {
             case 1:
-                // 1日目: 基本的なノックバック
+                // 1日目: 基本効果のみ
                 break;
             case 2:
-                // 2日目: 少し強いノックバック
+                // 2日目: 軽いノックバック
                 Vec3 knockback2 = target.position().subtract(tungSahur.position()).normalize();
                 target.setDeltaMovement(target.getDeltaMovement().add(
                         knockback2.x * 0.3D, 0.1D, knockback2.z * 0.3D));
@@ -194,7 +216,7 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
     }
 
     /**
-     * 攻撃距離の計算（バットの長さを考慮）
+     * 攻撃距離の計算
      */
     @Override
     protected double getAttackReachSqr(LivingEntity target) {
@@ -212,12 +234,17 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
         return totalReach * totalReach;
     }
 
+    /**
+     * 攻撃クールダウン管理を無効化
+     */
     @Override
     protected void resetAttackCooldown() {
-        // オーバーライドして独自のクールダウン管理を使用
-        // 実際のクールダウンはperformEnhancedAttack内で設定
+        // ここでは何もしない - checkAndPerformAttackで直接設定
     }
 
+    /**
+     * 攻撃可能判定
+     */
     @Override
     protected boolean isTimeToAttack() {
         return tungSahur.canAttack() && !isPreparingAttack;
@@ -238,8 +265,16 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
                         1, 0.2D, 0.2D, 0.2D, 0.0D);
             }
 
+            // 準備完了時にダメージ実行
             if (attackPreparationTime <= 0) {
                 isPreparingAttack = false;
+
+                if (pendingTarget != null) {
+                    executeDamage(pendingTarget);
+                    pendingTarget = null;
+                }
+
+                TungSahurMod.LOGGER.debug("攻撃準備完了 - ダメージ実行");
             }
         }
     }
@@ -248,7 +283,13 @@ public class TungSahurMeleeAttackGoal extends MeleeAttackGoal {
     public void stop() {
         super.stop();
         isPreparingAttack = false;
-        tungSahur.setCurrentlyAttacking(false);
+        pendingTarget = null;
         attackPreparationTime = 0;
+
+        // Goal停止時はアニメーション状態をリセット
+        if (tungSahur.isCurrentlyAttacking()) {
+            tungSahur.setCurrentlyAttacking(false);
+            TungSahurMod.LOGGER.debug("攻撃Goal停止 - アニメーション状態リセット");
+        }
     }
 }

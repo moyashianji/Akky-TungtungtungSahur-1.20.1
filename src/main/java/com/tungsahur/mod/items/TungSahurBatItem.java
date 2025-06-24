@@ -640,21 +640,21 @@ public class TungSahurBatItem extends Item {
 
         // ダメージ情報（levelに依存しないメソッドを使用）
         float damage = calculatePlayerMeleeDamageFromTag(tag);
-        tooltip.add(Component.literal("§7近接ダメージ: §e" + String.format("%.1f", damage)).withStyle(ChatFormatting.GRAY));
+        //tooltip.add(Component.literal("§7近接ダメージ: §e" + String.format("%.1f", damage)).withStyle(ChatFormatting.GRAY));
 
         // 特殊状態
         if (tag.getBoolean("Bloodstained")) {
-            tooltip.add(Component.literal("§4§l血に染まっている").withStyle(ChatFormatting.DARK_RED));
+            //tooltip.add(Component.literal("§4§l血に染まっている").withStyle(ChatFormatting.DARK_RED));
         }
 
         if (tag.getBoolean("Cursed")) {
-            tooltip.add(Component.literal("§5§l呪われている").withStyle(ChatFormatting.DARK_PURPLE));
+            //tooltip.add(Component.literal("§5§l呪われている").withStyle(ChatFormatting.DARK_PURPLE));
         }
 
         // 恐怖度
         int fearLevel = tag.getInt("FearLevel");
         if (fearLevel > 0) {
-            tooltip.add(Component.literal("§8恐怖度: " + "■".repeat(Math.min(fearLevel, 10))).withStyle(ChatFormatting.DARK_GRAY));
+          //  tooltip.add(Component.literal("§8恐怖度: " + "■".repeat(Math.min(fearLevel, 10))).withStyle(ChatFormatting.DARK_GRAY));
         }
     }
 

@@ -5,7 +5,7 @@
   },
   "spawners": {
     "type": "tungsahurmod:tung_sahur",
-    "weight": 100,
+    "weight": 1,
     "minCount": 1,
     "maxCount": 1
   }

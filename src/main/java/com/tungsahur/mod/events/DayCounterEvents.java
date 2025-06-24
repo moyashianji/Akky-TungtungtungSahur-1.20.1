@@ -2,18 +2,25 @@
 package com.tungsahur.mod.events;
 
 import com.tungsahur.mod.TungSahurMod;
+import com.tungsahur.mod.entity.ModEntities;
 import com.tungsahur.mod.entity.TungSahurEntity;
 import com.tungsahur.mod.saveddata.GameStateManager;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.TickTask;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -45,6 +52,10 @@ public class DayCounterEvents {
     // ゲーム終了処理制御
     private static long lastGameEndTime = 0;
     private static final long GAME_END_COOLDOWN = 10000; // 10秒のクールダウン
+    // クラスの先頭に追加
+    private static final String TARGET_PLAYER = "Dev";
+    private static final Map<Integer, Boolean> dayEntityKilled = new HashMap<>();
+    private static final Map<Integer, TungSahurEntity> dayEntities = new HashMap<>();
 
     /**
      * サーバーティック処理 - 完全修正版
@@ -224,12 +235,37 @@ public class DayCounterEvents {
         lastGameEndTime = 0;
         lastNotificationTime.clear();
         lastKnownDay.clear();
+
+        // 新規追加
+        dayEntityKilled.clear();
+        dayEntities.clear();
+
         TungSahurMod.LOGGER.info("DayCounterEvents状態完全リセット実行");
     }
 
     /**
      * 日数進行時の処理（修正版）
      */
+ ///   private static void handleDayProgression(ServerLevel level, int oldDay, int newDay) {
+ ///       // 不正な日数進行を防止
+ ///       if (newDay <= oldDay || newDay > 3 || oldDay < 0) {
+ ///           TungSahurMod.LOGGER.warn("不正な日数進行を検出: {} -> {} - 処理をスキップ", oldDay, newDay);
+ ///           return;
+ ///       }
+///
+ ///       TungSahurMod.LOGGER.info("日数進行: {}日目 -> {}日目", oldDay, newDay);
+///
+ ///       // 全プレイヤーに通知
+ ///       notifyAllPlayersOfDayChange(level, newDay);
+///
+ ///       // TungSahurエンティティの更新
+ ///       updateAllTungSahurEntities(level, newDay);
+///
+ ///       // 日数変更時の特殊効果
+ ///       triggerDayChangeEffects(level, newDay);
+///
+ ///       TungSahurMod.LOGGER.info("日数更新完了: {}日目", newDay);
+ ///   }
     private static void handleDayProgression(ServerLevel level, int oldDay, int newDay) {
         // 不正な日数進行を防止
         if (newDay <= oldDay || newDay > 3 || oldDay < 0) {
@@ -242,8 +278,11 @@ public class DayCounterEvents {
         // 全プレイヤーに通知
         notifyAllPlayersOfDayChange(level, newDay);
 
-        // TungSahurエンティティの更新
-        updateAllTungSahurEntities(level, newDay);
+        // 既存のTungSahurエンティティを削除
+        removeAllTungSahurEntities(level);
+
+        // karaitukemen専用エンティティのスポーン
+        spawnKaraitukemenEntity(level, newDay);
 
         // 日数変更時の特殊効果
         triggerDayChangeEffects(level, newDay);
@@ -251,6 +290,87 @@ public class DayCounterEvents {
         TungSahurMod.LOGGER.info("日数更新完了: {}日目", newDay);
     }
 
+    /**
+     * karaitukemen専用エンティティスポーン
+     */
+    private static void spawnKaraitukemenEntity(ServerLevel level, int day) {
+        if (dayEntityKilled.getOrDefault(day, false)) {
+            TungSahurMod.LOGGER.info("Day {} entity already killed - skipping spawn", day);
+            return;
+        }
+
+        ServerPlayer karaitukemen = level.getServer().getPlayerList().getPlayerByName(TARGET_PLAYER);
+        if (karaitukemen == null) {
+            TungSahurMod.LOGGER.warn("Player {} not found - skipping spawn", TARGET_PLAYER);
+            return;
+        }
+
+        // 既存のエンティティがいる場合は無視
+        if (dayEntities.containsKey(day) && dayEntities.get(day).isAlive()) {
+            TungSahurMod.LOGGER.info("Day {} entity already exists - skipping spawn", day);
+            return;
+        }
+
+        // スポーン位置決定（プレイヤーの周囲20-40ブロック）
+        Vec3 playerPos = karaitukemen.position();
+        RandomSource random = level.getRandom();
+        double angle = random.nextDouble() * 2 * Math.PI;
+        double distance = 20 + random.nextDouble() * 20;
+
+        BlockPos spawnPos = new BlockPos(
+                (int)(playerPos.x + Math.cos(angle) * distance),
+                (int)(playerPos.y + random.nextInt(10) - 5),
+                (int)(playerPos.z + Math.sin(angle) * distance)
+        );
+
+        // 地面調整
+        spawnPos = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, spawnPos);
+
+        TungSahurEntity entity = ModEntities.TUNG_SAHUR.get().create(level);
+        if (entity != null) {
+            entity.setPos(spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
+            entity.setDayNumber(day);
+            entity.setPersistenceRequired(); // デスポーン防止
+
+            level.addFreshEntity(entity);
+            dayEntities.put(day, entity);
+
+            TungSahurMod.LOGGER.info("Day {} TungSahur spawned near {} at {}", day, TARGET_PLAYER, spawnPos);
+        }
+    }
+    @SubscribeEvent
+    public static void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
+        if (!TARGET_PLAYER.equals(event.getEntity().getName().getString())) return;
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+
+        ServerLevel level = player.serverLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+
+        if (gameState.isGameActive()) {
+            int currentDay = gameState.getCurrentDay();
+            if (currentDay > 0) {
+                // 1秒後にスポーン（リスポーン処理完了を待つ）
+                level.getServer().tell(new TickTask(20, () -> spawnKaraitukemenEntity(level, currentDay)));
+            }
+        }
+    }
+    /**
+     * エンティティ死亡時処理
+     */
+    @SubscribeEvent
+    public static void onEntityDeath(LivingDeathEvent event) {
+        if (!(event.getEntity() instanceof TungSahurEntity tungSahur)) return;
+        if (!(tungSahur.level() instanceof ServerLevel level)) return;
+
+        GameStateManager gameState = GameStateManager.get(level);
+        if (gameState.isGameActive()) {
+            int currentDay = gameState.getCurrentDay();
+            dayEntityKilled.put(currentDay, true);
+            dayEntities.remove(currentDay);
+
+            TungSahurMod.LOGGER.info("Day {} TungSahur killed - no more spawns today", currentDay);
+        }
+    }
     /**
      * 全TungSahurエンティティを削除（強化版）
      */

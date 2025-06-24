@@ -1,0 +1,10 @@
+{
+  "tungtungsahur": {
+    "sounds": [
+      {
+        "name": "tungsahurmod:tolunnvoice",
+        "stream": false
+      }
+    ]
+  }
+}

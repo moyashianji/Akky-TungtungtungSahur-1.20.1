@@ -67,7 +67,7 @@ public class TungSahurMod {
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::addCreative);
         modEventBus.addListener(this::registerAttributes);
-        modEventBus.addListener(this::registerSpawnPlacements);
+
         modEventBus.addListener(this::setupNetwork);
 
         // Forge Event Bus登録
@@ -113,13 +113,6 @@ public class TungSahurMod {
         event.put(ModEntities.TUNG_SAHUR.get(), TungSahurEntity.createAttributes().build());
     }
 
-    private void registerSpawnPlacements(SpawnPlacementRegisterEvent event) {
-        event.register(ModEntities.TUNG_SAHUR.get(),
-                SpawnPlacements.Type.ON_GROUND,
-                Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-                Monster::checkMonsterSpawnRules,
-                SpawnPlacementRegisterEvent.Operation.REPLACE);
-    }
 
     /**
      * コマンド登録

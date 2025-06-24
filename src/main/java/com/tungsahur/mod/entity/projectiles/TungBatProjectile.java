@@ -418,18 +418,17 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         }
     }
 
-    // === ヒット処理 ===
     @Override
     protected void onHitEntity(EntityHitResult result) {
         Entity hitEntity = result.getEntity();
 
         if (hitEntity instanceof LivingEntity target) {
-            // 基本ダメージ（削減済み）
+            // 基本ダメージ（強化済み）
             float damage = calculateEnhancedDamage();
 
-            // プレイヤーにはさらに削減
+            // プレイヤーには軽減（0.5F→0.7F に調整）
             if (target instanceof net.minecraft.world.entity.player.Player) {
-                damage *= 0.5F; // プレイヤーには半分のダメージ
+                damage *= 0.7F; // プレイヤーには30%軽減（50%→30%に変更）
             }
 
             // ダメージ適用
@@ -454,6 +453,10 @@ public class TungBatProjectile extends ThrowableItemProjectile {
 
     @Override
     protected void onHitBlock(BlockHitResult result) {
+        // 爆発ダメージをプレイヤーに与える処理を追加
+        if (this.level() instanceof ServerLevel serverLevel) {
+            dealExplosionDamageToPlayers(serverLevel, result.getLocation());
+        }
         // 地面破壊処理
         performGroundDestruction(result);
 
@@ -462,7 +465,62 @@ public class TungBatProjectile extends ThrowableItemProjectile {
 
         super.onHitBlock(result);
     }
+    /**
+     * 爆発ダメージをプレイヤーに与える
+     */
+    private void dealExplosionDamageToPlayers(ServerLevel serverLevel, Vec3 explosionCenter) {
+        // 爆発半径（日数に応じて拡大）
+        double explosionRadius = switch (getThrowerDayNumber()) {
+            case 1 -> 4.0D;  // 1日目: 4ブロック
+            case 2 -> 6.0D;  // 2日目: 6ブロック
+            case 3 -> 8.0D;  // 3日目: 8ブロック
+            default -> 4.0D;
+        };
 
+        // 基本爆発ダメージ（日数に応じて強化）
+        float baseDamage = switch (getThrowerDayNumber()) {
+            case 1 -> 6.0F;   // 1日目: 6ダメージ
+            case 2 -> 10.0F;  // 2日目: 10ダメージ
+            case 3 -> 15.0F;  // 3日目: 15ダメージ
+            default -> 6.0F;
+        };
+
+        // Vec3からAABBを直接作成
+        AABB explosionArea = new AABB(
+                explosionCenter.x - explosionRadius, explosionCenter.y - explosionRadius, explosionCenter.z - explosionRadius,
+                explosionCenter.x + explosionRadius, explosionCenter.y + explosionRadius, explosionCenter.z + explosionRadius
+        );
+
+        List<net.minecraft.world.entity.player.Player> playersInRange =
+                serverLevel.getEntitiesOfClass(net.minecraft.world.entity.player.Player.class, explosionArea);
+
+        for (net.minecraft.world.entity.player.Player player : playersInRange) {
+            double distance = player.position().distanceTo(explosionCenter);
+
+            // 距離による減衰（爆発中心に近いほど高ダメージ）
+            double damageReduction = Math.max(0.2D, 1.0D - (distance / explosionRadius));
+            float finalDamage = (float)(baseDamage * damageReduction);
+
+            // ダメージ適用
+            player.hurt(this.damageSources().explosion(null, this.getOwner()), finalDamage);
+
+            // ノックバック効果
+            Vec3 knockbackDirection = player.position().subtract(explosionCenter).normalize();
+            double knockbackStrength = damageReduction * 0.8D; // 最大0.8の強度
+            player.setDeltaMovement(player.getDeltaMovement().add(
+                    knockbackDirection.x * knockbackStrength,
+                    knockbackDirection.y * knockbackStrength * 0.5D, // 垂直ノックバックは半分
+                    knockbackDirection.z * knockbackStrength
+            ));
+
+            TungSahurMod.LOGGER.debug("爆発ダメージ: {} に {} ダメージ (距離: {:.2f})",
+                    player.getName().getString(), finalDamage, distance);
+        }
+
+        // 爆発音
+        serverLevel.playSound(null, explosionCenter.x, explosionCenter.y, explosionCenter.z,
+                SoundEvents.GENERIC_EXPLODE, SoundSource.HOSTILE, 2.0F, 1.0F);
+    }
     private void performGroundDestruction(BlockHitResult result) {
         if (!(this.level() instanceof ServerLevel serverLevel)) return;
 
@@ -607,13 +665,18 @@ public class TungBatProjectile extends ThrowableItemProjectile {
         }
     }
 
-    // === ダメージ計算を大幅弱体化 ===
+    // === ダメージ計算を強化 ===
     private float calculateEnhancedDamage() {
-        float baseDamage = 2.0F; // 8.0F → 2.0F に大幅削減
-        float dayMultiplier = getThrowerDayNumber() * 0.3F; // 2.0F → 0.3F に大幅削減
-        float speedBonus = (float) this.getDeltaMovement().length() * 0.3F; // 2.0F → 0.3F に大幅削減
+        float baseDamage = switch (getThrowerDayNumber()) {
+            case 1 -> 8.0F;   // 1日目: 8ダメージ (2.0F→8.0F)
+            case 2 -> 12.0F;  // 2日目: 12ダメージ
+            case 3 -> 16.0F;  // 3日目: 16ダメージ
+            default -> 6.0F;
+        };
 
-        return (baseDamage + dayMultiplier + speedBonus) * getDamageMultiplier();
+        float speedBonus = (float) this.getDeltaMovement().length() * 1.5F; // 0.3F→1.5F に強化
+
+        return (baseDamage + speedBonus) * getDamageMultiplier();
     }
 
     // === プレイヤーへの効果を完全削除 ===
