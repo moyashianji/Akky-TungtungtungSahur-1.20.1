@@ -11,6 +11,7 @@ import com.tungsahur.mod.items.ModItems;
 import com.tungsahur.mod.network.NetworkHandler;
 import com.tungsahur.mod.saveddata.DayCountSavedData;
 import com.tungsahur.mod.saveddata.GameStateManager;
+import com.tungsahur.mod.sounds.ModSounds;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.Mob;
@@ -62,6 +63,7 @@ public class TungSahurMod {
         ModEntities.register(modEventBus);
         ModItems.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
+        ModSounds.REGISTRY.register(modEventBus);
 
         // イベント登録
         modEventBus.addListener(this::commonSetup);

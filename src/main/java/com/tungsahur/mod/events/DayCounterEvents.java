@@ -104,10 +104,17 @@ public class DayCounterEvents {
     }
 
     /**
-     * 余分なサフールエンティティを削除（1体制限強制）
+     * 余分なサフールエンティティを削除（ゲーム開始時のみ1体制限）
      */
     private static void cleanupExtraEntities(ServerLevel level) {
-        // 全TungSahurエンティティを取得
+        GameStateManager gameState = GameStateManager.get(level);
+
+        // ゲームが開始されていない場合は何体でもOK
+        if (!gameState.isGameStarted()) {
+            return;
+        }
+
+        // ゲーム開始後は1体制限を適用
         var worldBorder = level.getWorldBorder();
         var searchArea = new AABB(
                 worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
@@ -116,11 +123,11 @@ public class DayCounterEvents {
 
         List<TungSahurEntity> allEntities = level.getEntitiesOfClass(TungSahurEntity.class, searchArea);
 
-        // 現在のサフール以外は全て削除
+        // 現在のサフール以外は全て削除（ゲーム開始後のみ）
         for (TungSahurEntity entity : allEntities) {
             if (entity != currentTungSahurEntity) {
                 entity.discard();
-                TungSahurMod.LOGGER.warn("Extra TungSahur entity removed - only one allowed!");
+                TungSahurMod.LOGGER.warn("Extra TungSahur entity removed during game - only one allowed!");
             }
         }
 
@@ -217,7 +224,7 @@ public class DayCounterEvents {
 
         // 現在のサフールを削除
         removeCurrentTungSahur();
-        forceRemoveAllTungSahurEntities(level); // 強制的に全削除
+        forceRemoveAllTungSahurEntitiesUnconditionally(level); // ゲーム終了時は無条件で全削除
 
         // 全プレイヤーにゲーム終了を通知
         Component endMessage = Component.literal("§l=== ゲーム終了 ===")
@@ -241,6 +248,27 @@ public class DayCounterEvents {
 
         // 次回ゲーム開始の準備（状態はリセットしない）
         TungSahurMod.LOGGER.info("ゲーム終了処理完了 - 以降の処理を停止");
+    }
+
+    /**
+     * 全TungSahurエンティティを無条件で強制削除（ゲーム終了時用）
+     */
+    private static void forceRemoveAllTungSahurEntitiesUnconditionally(ServerLevel level) {
+        var worldBorder = level.getWorldBorder();
+        var searchArea = new AABB(
+                worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
+                worldBorder.getMaxX(), level.getMaxBuildHeight(), worldBorder.getMaxZ()
+        );
+
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class, searchArea);
+
+        for (TungSahurEntity entity : entities) {
+            entity.discard();
+        }
+
+        if (entities.size() > 0) {
+            TungSahurMod.LOGGER.info("Game end: Removed {} TungSahur entities", entities.size());
+        }
     }
 
     /**
@@ -421,9 +449,17 @@ public class DayCounterEvents {
     }
 
     /**
-     * 全TungSahurエンティティを強制削除
+     * 全TungSahurエンティティを強制削除（ゲーム開始後のみ）
      */
     private static void forceRemoveAllTungSahurEntities(ServerLevel level) {
+        GameStateManager gameState = GameStateManager.get(level);
+
+        // ゲームが開始されていない場合は削除しない
+        if (!gameState.isGameStarted()) {
+            TungSahurMod.LOGGER.info("Game not started - skipping entity cleanup");
+            return;
+        }
+
         var worldBorder = level.getWorldBorder();
         var searchArea = new AABB(
                 worldBorder.getMinX(), level.getMinBuildHeight(), worldBorder.getMinZ(),
@@ -437,7 +473,7 @@ public class DayCounterEvents {
         }
 
         if (entities.size() > 0) {
-            TungSahurMod.LOGGER.info("Forced removal of {} TungSahur entities", entities.size());
+            TungSahurMod.LOGGER.info("Forced removal of {} TungSahur entities during game", entities.size());
         }
     }
 
