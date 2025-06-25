@@ -1,4 +1,4 @@
-// TungSahurCommands.java - 新しいゲームフロー対応版
+// TungSahurCommands.java - 完全版（時間変更コマンド + 既存機能統合）
 package com.tungsahur.mod.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
@@ -34,6 +34,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.apache.logging.log4j.core.appender.SyslogAppender;
 
 import java.util.Collection;
 import java.util.List;
@@ -52,6 +53,31 @@ public class TungSahurCommands {
                         // /tungsahur reset - ゲームリセット
                         .then(Commands.literal("reset")
                                 .executes(TungSahurCommands::resetGame))
+
+                        // === 新機能：時間変更コマンド ===
+                        // /tungsahur time dawn - 朝にする
+                        .then(Commands.literal("time")
+                                .then(Commands.literal("dawn")
+                                        .executes(TungSahurCommands::setTimeToDawn))
+                                .then(Commands.literal("day")
+                                        .executes(TungSahurCommands::setTimeToDay))
+                                .then(Commands.literal("night")
+                                        .executes(TungSahurCommands::setTimeToNight))
+                                .then(Commands.literal("set")
+                                        .then(Commands.argument("time", IntegerArgumentType.integer(0, 23999))
+                                                .executes(context -> setTime(context, IntegerArgumentType.getInteger(context, "time"))))))
+
+                        // === 新機能：夜をスキップ ===
+                        // /tungsahur skip night - 現在の夜をスキップして朝にする
+                        .then(Commands.literal("skip")
+                                .then(Commands.literal("night")
+                                        .executes(TungSahurCommands::skipNight)))
+
+                        // === 新機能：安全な睡眠モード ===
+                        // /tungsahur sleep force - 強制的に朝にして安全に休める状態にする
+                        .then(Commands.literal("sleep")
+                                .then(Commands.literal("force")
+                                        .executes(TungSahurCommands::forceSafeSleep)))
 
                         // 既存のコマンドも維持
                         .then(Commands.literal("status")
@@ -102,8 +128,236 @@ public class TungSahurCommands {
                                 .then(Commands.literal("sounds")
                                         .executes(TungSahurCommands::testSounds))
                                 .then(Commands.literal("sleep")
-                                        .executes(TungSahurCommands::debugSleepSystem)))
+                                        .executes(TungSahurCommands::debugSleepSystem))
+                                .then(Commands.literal("events")
+                                        .executes(TungSahurCommands::debugEvents)))
         );
+    }
+
+    // === 新機能：時間変更コマンド群 ===
+
+    /**
+     * 朝（夜明け）に時間を設定
+     */
+    private static int setTimeToDawn(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        long currentTime = level.getDayTime();
+        long currentDay = currentTime / 24000L;
+        long newTime = currentDay * 24000L + 0L; // 夜明け（0tick）
+
+        level.setDayTime(newTime);
+
+        // サフールを削除（朝なので）
+        removeAllTungSahurEntitiesWithMessage(level, "朝の時間設定により削除");
+
+        // プレイヤーに通知
+        Component message = Component.literal("§e☀ 時間を夜明けに設定しました ☀")
+                .withStyle(ChatFormatting.YELLOW, ChatFormatting.BOLD)
+                .append("\n")
+                .append(Component.literal("§7すべてのTung Sahurが朝の光とともに消え去りました")
+                        .withStyle(ChatFormatting.GRAY));
+
+        context.getSource().sendSuccess(() -> message, true);
+
+        // 朝の効果音とパーティクル
+        try {
+            spawnDawnEffects(level, context.getSource().getPlayerOrException());
+        } catch (CommandSyntaxException e) {
+            // プレイヤーが見つからない場合はエフェクトをスキップ
+        }
+
+        TungSahurMod.LOGGER.info("時間を夜明けに設定: {} -> {}", currentTime, newTime);
+        return 1;
+    }
+
+    /**
+     * 昼（正午）に時間を設定
+     */
+    private static int setTimeToDay(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        long currentTime = level.getDayTime();
+        long currentDay = currentTime / 24000L;
+        long newTime = currentDay * 24000L + 6000L; // 正午（6000tick）
+
+        level.setDayTime(newTime);
+
+        // サフールを削除（昼間なので）
+        removeAllTungSahurEntitiesWithMessage(level, "昼間の時間設定により削除");
+
+        //Component message = Component.literal("§e☀ 時間を昼間に設定しました ☀")
+        //        .withStyle(ChatFormatting.YELLOW, ChatFormatting.BOLD);
+//
+        //context.getSource().sendSuccess(() -> message, true);
+
+        TungSahurMod.LOGGER.info("時間を昼間に設定: {} -> {}", currentTime, newTime);
+        return 1;
+    }
+
+    /**
+     * 夜に時間を設定
+     */
+    private static int setTimeToNight(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        long currentTime = level.getDayTime();
+        long currentDay = currentTime / 24000L;
+        long newTime = currentDay * 24000L + 13000L; // 夜（13000tick）
+
+        level.setDayTime(newTime);
+
+       // Component message = Component.literal("§c🌙 時間を夜に設定しました 🌙")
+       //         .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
+       //         .append("\n")
+       //         .append(Component.literal("§7危険な時間帯です。注意してください...")
+       //                 .withStyle(ChatFormatting.GRAY));
+//
+       // context.getSource().sendSuccess(() -> message, true);
+
+        TungSahurMod.LOGGER.info("時間を夜に設定: {} -> {}", currentTime, newTime);
+        return 1;
+    }
+
+    /**
+     * 指定した時間に設定
+     */
+    private static int setTime(CommandContext<CommandSourceStack> context, int timeOfDay) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        long currentTime = level.getDayTime();
+        long currentDay = currentTime / 24000L;
+        long newTime = currentDay * 24000L + timeOfDay;
+
+        level.setDayTime(newTime);
+
+        // 時間帯に応じたメッセージ
+        String timeDescription;
+        if (timeOfDay < 6000) {
+            timeDescription = "夜明け前";
+            // 夜明け前なのでサフールを削除
+            removeAllTungSahurEntitiesWithMessage(level, "夜明け前の時間設定により削除");
+        } else if (timeOfDay < 13000) {
+            timeDescription = "昼間";
+            // 昼間なのでサフールを削除
+            removeAllTungSahurEntitiesWithMessage(level, "昼間の時間設定により削除");
+        } else if (timeOfDay < 18000) {
+            timeDescription = "夕方";
+        } else {
+            timeDescription = "夜";
+        }
+
+        Component message = Component.literal("§a時間を " + timeOfDay + "tick（" + timeDescription + "）に設定しました")
+                .withStyle(ChatFormatting.GREEN);
+
+        context.getSource().sendSuccess(() -> message, true);
+
+        TungSahurMod.LOGGER.info("時間を{}tickに設定: {} -> {}", timeOfDay, currentTime, newTime);
+        return 1;
+    }
+
+    // === 新機能：夜スキップ機能 ===
+
+    /**
+     * 現在の夜をスキップして朝にする
+     */
+    private static int skipNight(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+
+        // 現在が夜でない場合
+        if (!level.isNight()) {
+            context.getSource().sendFailure(Component.literal("現在は夜ではありません")
+                    .withStyle(ChatFormatting.RED));
+            return 0;
+        }
+
+        // 次の朝に時間を設定
+        long currentTime = level.getDayTime();
+        long currentDay = currentTime / 24000L;
+        long nextMorning = (currentDay + 1) * 24000L + 0L; // 次の日の夜明け
+
+        level.setDayTime(nextMorning);
+
+        // サフールを削除
+        removeAllTungSahurEntitiesWithMessage(level, "夜スキップにより削除");
+
+        // ゲーム中の場合の特別処理
+        if (gameState.isGameActive()) {
+            Component gameMessage = Component.literal("§6⚡ 夜をスキップしました ⚡")
+                    .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                    .append("\n")
+                    .append(Component.literal("§7今夜のTung Sahurは諦めて帰って行きました...")
+                            .withStyle(ChatFormatting.GRAY))
+                    .append("\n")
+                    .append(Component.literal("§7しかし、次の夜には再び現れるでしょう...")
+                            .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
+            System.out.println(gameMessage);
+           // context.getSource().sendSuccess(() -> gameMessage, true);
+        } else {
+            Component normalMessage = Component.literal("§6⚡ 夜をスキップして朝になりました ⚡")
+                    .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD);
+
+            context.getSource().sendSuccess(() -> normalMessage, true);
+        }
+
+        // 朝の効果
+        try {
+            spawnDawnEffects(level, context.getSource().getPlayerOrException());
+        } catch (CommandSyntaxException e) {
+            // プレイヤーが見つからない場合はエフェクトをスキップ
+        }
+
+        TungSahurMod.LOGGER.info("夜スキップ: {} -> {}", currentTime, nextMorning);
+        return 1;
+    }
+
+    // === 新機能：強制安全睡眠 ===
+
+    /**
+     * 強制的に安全な睡眠状態にする（朝にして全サフール削除）
+     */
+    private static int forceSafeSleep(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerLevel level = context.getSource().getLevel();
+        GameStateManager gameState = GameStateManager.get(level);
+
+        // 朝に時間を設定
+        long currentTime = level.getDayTime();
+        long currentDay = currentTime / 24000L;
+        long morningTime = currentDay * 24000L + 1000L; // 朝の1000tick
+
+        level.setDayTime(morningTime);
+
+        // 全サフールを強制削除
+        removeAllTungSahurEntitiesWithMessage(level, "強制安全睡眠により削除");
+
+        // プレイヤーに詳細なメッセージ
+        if (gameState.isGameActive()) {
+            Component message = Component.literal("§a💤 強制安全睡眠モード発動 💤")
+                    .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD)
+                    .append("\n")
+                    .append(Component.literal("§7すべてのTung Sahurを排除し、安全な朝の時間にしました")
+                            .withStyle(ChatFormatting.GRAY))
+                    .append("\n")
+                    .append(Component.literal("§7これで安心して休むことができます")
+                            .withStyle(ChatFormatting.GRAY))
+                    .append("\n")
+                    .append(Component.literal("§8※ゲーム進行は継続中です")
+                            .withStyle(ChatFormatting.DARK_GRAY));
+
+            context.getSource().sendSuccess(() -> message, true);
+        } else {
+            Component message = Component.literal("§a💤 安全な睡眠環境を設定しました 💤")
+                    .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD);
+
+            context.getSource().sendSuccess(() -> message, true);
+        }
+
+        // 平和な効果音とパーティクル
+        try {
+            spawnPeacefulSleepEffects(level, context.getSource().getPlayerOrException());
+        } catch (CommandSyntaxException e) {
+            // プレイヤーが見つからない場合はエフェクトをスキップ
+        }
+
+        TungSahurMod.LOGGER.info("強制安全睡眠: {} -> {}", currentTime, morningTime);
+        return 1;
     }
 
     // === 新しいゲームフローコマンド ===
@@ -138,14 +392,16 @@ public class TungSahurCommands {
                         .withStyle(ChatFormatting.RED))
                 .append("\n")
                 .append(Component.literal("夜になると1日目が開始されます。3日目の夜が終わるまで眠ることはできません。")
-                        .withStyle(ChatFormatting.GRAY));
+                        .withStyle(ChatFormatting.GRAY))
+                .append("\n")
+                ;
 
         for (ServerPlayer player : level.getPlayers(p -> true)) {
             player.sendSystemMessage(startMessage);
         }
 
-        context.getSource().sendSuccess(() -> Component.literal("ゲームを開始しました！恐怖の始まり...")
-                .withStyle(ChatFormatting.GREEN), true);
+      //  context.getSource().sendSuccess(() -> Component.literal("ゲームを開始しました！恐怖の始まり...")
+      //          .withStyle(ChatFormatting.GREEN), true);
 
         TungSahurMod.LOGGER.info("新しいゲーム開始 - DayCounterEvents初期化完了");
         return 1;
@@ -180,15 +436,17 @@ public class TungSahurCommands {
                         .withStyle(ChatFormatting.GRAY));
 
         for (ServerPlayer player : level.getPlayers(p -> true)) {
-            player.sendSystemMessage(resetMessage);
+           // player.sendSystemMessage(resetMessage);
+            System.out.println(resetMessage);
         }
 
-        context.getSource().sendSuccess(() -> Component.literal("ゲームをリセットしました")
-                .withStyle(ChatFormatting.GREEN), true);
+      //  context.getSource().sendSuccess(() -> Component.literal("ゲームをリセットしました")
+      //          .withStyle(ChatFormatting.GREEN), true);
 
         TungSahurMod.LOGGER.info("ゲーム完全リセット実行 - 次回開始時に正常動作予定");
         return 1;
     }
+
     /**
      * ゲーム状態確認コマンド
      */
@@ -203,14 +461,57 @@ public class TungSahurCommands {
                 .append(String.format("§f睡眠可能: §%s%s\n",
                         gameState.isSleepAllowed() ? "a" : "c",
                         gameState.isSleepAllowed() ? "はい" : "いいえ"))
-                .append(String.format("§fTungSahurエンティティ数: §d%d体",
-                        countTungSahurEntities(level)));
+                .append(String.format("§fTungSahurエンティティ数: §d%d体\n",
+                        countTungSahurEntities(level)))
+                .append(String.format("§f現在時刻: §e%d tick (%s)",
+                        level.getDayTime() % 24000L,
+                        level.isNight() ? "夜" : "昼"));
 
         context.getSource().sendSuccess(() -> statusMessage, false);
         return 1;
     }
 
-    // === 演出メソッド ===
+    // === エフェクト関数 ===
+
+    /**
+     * 夜明けの効果（パーティクルと音）
+     */
+    private static void spawnDawnEffects(ServerLevel level, ServerPlayer player) {
+        // 夜明けのパーティクル効果
+        for (int i = 0; i < 20; i++) {
+            double x = player.getX() + (level.random.nextDouble() - 0.5) * 8.0;
+            double y = player.getY() + level.random.nextDouble() * 5.0 + 1.0;
+            double z = player.getZ() + (level.random.nextDouble() - 0.5) * 8.0;
+
+            // 朝の光のパーティクル
+            level.sendParticles(ParticleTypes.END_ROD, x, y, z, 1, 0.0, 0.1, 0.0, 0.05);
+            level.sendParticles(ParticleTypes.GLOW, x, y, z, 1, 0.0, 0.1, 0.0, 0.1);
+        }
+
+        // 夜明けの音
+        level.playSound(null, player.blockPosition(), SoundEvents.NOTE_BLOCK_CHIME.get(),
+                SoundSource.AMBIENT, 1.0f, 1.2f);
+    }
+
+    /**
+     * 平和な睡眠の効果（パーティクルと音）
+     */
+    private static void spawnPeacefulSleepEffects(ServerLevel level, ServerPlayer player) {
+        // 平和なパーティクル効果
+        for (int i = 0; i < 15; i++) {
+            double x = player.getX() + (level.random.nextDouble() - 0.5) * 6.0;
+            double y = player.getY() + level.random.nextDouble() * 4.0 + 1.0;
+            double z = player.getZ() + (level.random.nextDouble() - 0.5) * 6.0;
+
+            // 安らぎのパーティクル
+            level.sendParticles(ParticleTypes.HEART, x, y, z, 1, 0.0, 0.1, 0.0, 0.05);
+            level.sendParticles(ParticleTypes.HAPPY_VILLAGER, x, y, z, 1, 0.0, 0.1, 0.0, 0.1);
+        }
+
+        // 平和な音
+        level.playSound(null, player.blockPosition(), SoundEvents.EXPERIENCE_ORB_PICKUP,
+                SoundSource.PLAYERS, 0.8f, 1.0f);
+    }
 
     /**
      * ゲーム開始時の演出
@@ -254,11 +555,29 @@ public class TungSahurCommands {
                         1, 0.0, 0.1, 0.0, 0.1);
             }
 
-
-
+            // 平和な音
+            level.playSound(null, pos, SoundEvents.EXPERIENCE_ORB_PICKUP,
+                    SoundSource.PLAYERS, 1.0f, 1.0f);
         }
 
         TungSahurMod.LOGGER.info("ゲームリセット演出を実行");
+    }
+
+    /**
+     * メッセージ付きで全TungSahurエンティティを削除
+     */
+    private static void removeAllTungSahurEntitiesWithMessage(ServerLevel level, String reason) {
+        List<TungSahurEntity> entities = level.getEntitiesOfClass(TungSahurEntity.class,
+                new AABB(level.getWorldBorder().getMinX(), level.getMinBuildHeight(), level.getWorldBorder().getMinZ(),
+                        level.getWorldBorder().getMaxX(), level.getMaxBuildHeight(), level.getWorldBorder().getMaxZ()));
+
+        for (TungSahurEntity entity : entities) {
+            entity.discard();
+        }
+
+        if (entities.size() > 0) {
+            TungSahurMod.LOGGER.info("{}: {}体のTungSahurエンティティを削除", reason, entities.size());
+        }
     }
 
     // === ユーティリティメソッド ===
@@ -288,17 +607,17 @@ public class TungSahurCommands {
         TungSahurMod.LOGGER.info("{}体のTungSahurエンティティを削除", entities.size());
     }
 
-    // === 既存のコマンドメソッド（そのまま維持） ===
+    // === 既存のコマンドメソッド ===
 
     private static int getCurrentDay(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
+        GameStateManager gameState = GameStateManager.get(level);
 
-        Component message = Component.literal("現在の日数: " + dayData.getDayCount() + "日目")
+        Component message = Component.literal("現在の日数: " + gameState.getCurrentDay() + "日目")
                 .withStyle(ChatFormatting.YELLOW);
 
         context.getSource().sendSuccess(() -> message, false);
-        return dayData.getDayCount();
+        return gameState.getCurrentDay();
     }
 
     private static int setDay(CommandContext<CommandSourceStack> context, int day) throws CommandSyntaxException {
@@ -349,16 +668,14 @@ public class TungSahurCommands {
         return newDay;
     }
 
-    // === その他の既存メソッドもそのまま維持 ===
-
     private static int spawnEntity(CommandContext<CommandSourceStack> context, Vec3 pos) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
+        GameStateManager gameState = GameStateManager.get(level);
 
         TungSahurEntity entity = ModEntities.TUNG_SAHUR.get().create(level);
         if (entity != null) {
             entity.setPos(pos.x, pos.y, pos.z);
-            entity.setDayNumber(dayData.getDayCount());
+            entity.setDayNumber(gameState.getCurrentDay());
             entity.finalizeSpawn((ServerLevelAccessor) level, level.getCurrentDifficultyAt(BlockPos.containing(pos)),
                     MobSpawnType.COMMAND, null, null);
             level.addFreshEntity(entity);
@@ -403,9 +720,9 @@ public class TungSahurCommands {
 
     private static int updateAllEntities(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerLevel level = context.getSource().getLevel();
-        DayCountSavedData dayData = DayCountSavedData.get(level);
+        GameStateManager gameState = GameStateManager.get(level);
 
-        int count = updateAllTungSahurEntities(level, dayData.getDayCount());
+        int count = updateAllTungSahurEntities(level, gameState.getCurrentDay());
 
         Component message = Component.literal(String.format("%d体のTungSahurエンティティを更新しました", count))
                 .withStyle(ChatFormatting.GREEN);
@@ -465,9 +782,12 @@ public class TungSahurCommands {
                 .append(String.format("§fゲーム状態: §e%s\n", gameState.getGameStatus()))
                 .append(String.format("§f現在の日数: §e%d日目\n", gameState.getCurrentDay()))
                 .append(String.format("§f総エンティティ数: §b%d体\n", entities.size()))
-                .append(String.format("§f睡眠可能: §%s%s",
+                .append(String.format("§f睡眠可能: §%s%s\n",
                         gameState.isSleepAllowed() ? "a" : "c",
-                        gameState.isSleepAllowed() ? "はい" : "いいえ"));
+                        gameState.isSleepAllowed() ? "はい" : "いいえ"))
+                .append(String.format("§f現在時刻: §e%d tick (%s)",
+                        level.getDayTime() % 24000L,
+                        level.isNight() ? "夜" : "昼"));
 
         context.getSource().sendSuccess(() -> message, false);
         return 1;
@@ -511,6 +831,18 @@ public class TungSahurCommands {
 
         context.getSource().sendSuccess(() -> Component.literal("睡眠システムデバッグ情報をログに出力")
                 .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int debugEvents(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        String debugInfo = DayCounterEvents.getDebugInfo();
+
+        Component message = Component.literal("§6=== DayCounterEvents Debug Info ===\n")
+                .append(Component.literal(debugInfo).withStyle(ChatFormatting.GRAY));
+
+        context.getSource().sendSuccess(() -> message, false);
+
+        TungSahurMod.LOGGER.info("DayCounterEvents Debug: {}", debugInfo);
         return 1;
     }
 
