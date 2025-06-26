@@ -108,44 +108,38 @@ public class TungSahurBatItem extends Item {
      * プレイヤーによるバット投擲
      */
     private void throwPlayerBat(Level level, Player player, ItemStack stack) {
-        // 既存のTungBatProjectileを使用（プレイヤー仕様に調整）
         TungBatProjectile projectile = new TungBatProjectile(level, player);
 
-        // プレイヤー用の設定
-        projectile.setThrowerDayNumber(getPlayerBatPower(stack));
-        projectile.setDamageMultiplier(1.0F);
-        projectile.setHoming(false); // プレイヤー投擲はホーミングなし
+        // ★弱体化された設定★
+        projectile.setThrowerDayNumber(Math.min(getPlayerBatPower(stack), 2)); // 最大Day2相当まで
+        projectile.setDamageMultiplier(0.4F); // 1.0F → 0.4F (60%削減)
+        projectile.setHoming(false);
         projectile.setExplosive(false);
 
-        // 投擲方向と速度
         Vec3 lookDirection = player.getLookAngle();
-        double throwSpeed = 1.5D + (getPlayerBatPower(stack) * 0.3D);
+        double throwSpeed = 1.0D + (getPlayerBatPower(stack) * 0.1D); // 1.5D + 0.3D → 1.0D + 0.1D
 
-        // プロジェクタイルの位置と速度設定
         projectile.setPos(player.getX(), player.getEyeY() - 0.1D, player.getZ());
         projectile.shoot(lookDirection.x, lookDirection.y + 0.1D, lookDirection.z, (float) throwSpeed, 1.0F);
 
         level.addFreshEntity(projectile);
 
-        // 投擲音
+        // 音量削減
         level.playSound(null, player.getX(), player.getY(), player.getZ(),
                 SoundEvents.CROSSBOW_SHOOT, SoundSource.PLAYERS,
-                0.8F, 1.0F + (getPlayerBatPower(stack) * 0.1F));
+                0.5F, 1.0F + (getPlayerBatPower(stack) * 0.05F)); // 0.8F → 0.5F
 
-        // パーティクル効果
         if (level instanceof ServerLevel serverLevel) {
+            // パーティクル削減
             serverLevel.sendParticles(ParticleTypes.CRIT,
                     player.getX(), player.getEyeY(), player.getZ(),
-                    8, 0.3, 0.3, 0.3, 0.1);
+                    4, 0.2, 0.2, 0.2, 0.05); // 8 → 4
         }
 
-        // クールダウン設定
         setThrowCooldown(stack, level);
-
-        // 使用回数更新
         handlePlayerThrow(level, player, stack);
 
-        TungSahurMod.LOGGER.debug("プレイヤー {} がバットを投擲", player.getName().getString());
+        TungSahurMod.LOGGER.debug("プレイヤー {} が弱体化バットを投擲", player.getName().getString());
     }
 
     /**
@@ -154,40 +148,43 @@ public class TungSahurBatItem extends Item {
     private void handlePlayerMeleeAttack(ItemStack stack, LivingEntity target, Player attacker) {
         CompoundTag tag = stack.getOrCreateTag();
 
-        // 攻撃回数の記録
         int attackCount = tag.getInt("PlayerAttackCount") + 1;
         tag.putInt("PlayerAttackCount", attackCount);
 
-        // 追加ダメージの計算
+        // ★弱体化されたダメージ★
         float extraDamage = calculatePlayerMeleeDamage(stack);
 
-        // 追加ダメージを適用
         if (extraDamage > 0) {
             target.hurt(attacker.damageSources().playerAttack(attacker), extraDamage);
         }
 
-        // 近接攻撃の特殊効果
+        // 特殊効果も弱体化
         applyMeleeEffects(stack, target, attacker);
 
-        // 血の記録
+        // キル記録（条件をより厳しく）
         if (target.isDeadOrDying()) {
             int killCount = tag.getInt("KillCount") + 1;
             tag.putInt("KillCount", killCount);
-            tag.putBoolean("Bloodstained", true);
 
-            if (killCount >= 10) {
+            // 血痕になる条件を厳しく（3キル以上必要）
+            if (killCount >= 3) {
+                tag.putBoolean("Bloodstained", true);
+            }
+
+            // 呪いになる条件をより厳しく（20キル必要）
+            if (killCount >= 20) {
                 tag.putBoolean("Cursed", true);
                 attacker.sendSystemMessage(Component.literal("バットが呪われた...").withStyle(ChatFormatting.DARK_PURPLE));
             }
         }
 
-        // 近接攻撃音
+        // 音も小さく
         attacker.level().playSound(null, attacker.getX(), attacker.getY(), attacker.getZ(),
-                SoundEvents.PLAYER_ATTACK_CRIT, SoundSource.PLAYERS,
-                0.7F, 1.0F + (getPlayerBatPower(stack) * 0.1F));
+                SoundEvents.PLAYER_ATTACK_WEAK, SoundSource.PLAYERS, // CRIT → WEAK
+                0.4F, 1.0F + (getPlayerBatPower(stack) * 0.05F)); // 0.7F → 0.4F
 
-        TungSahurMod.LOGGER.debug("プレイヤー {} が {} に近接攻撃",
-                attacker.getName().getString(), target.getClass().getSimpleName());
+        TungSahurMod.LOGGER.debug("プレイヤー {} が {} に弱体化近接攻撃 (ダメージ: {})",
+                attacker.getName().getString(), target.getClass().getSimpleName(), extraDamage);
     }
 
     /**
@@ -196,24 +193,26 @@ public class TungSahurBatItem extends Item {
     private float calculatePlayerMeleeDamageFromTag(CompoundTag tag) {
         if (tag == null) return 0.0F;
 
-        float baseDamage = BASE_ATTACK_DAMAGE;
+        float baseDamage = BASE_ATTACK_DAMAGE; // 2.0F
 
-        // 日数による強化
+        // 日数による強化削減
         int dayNumber = tag.getInt("DayNumber");
-        float dayBonus = dayNumber * 1.5F;
+        float dayBonus = dayNumber * 0.5F; // 1.5F → 0.5F
 
-        // 使用経験による強化
+        // 使用経験による強化削減
         int attackCount = tag.getInt("PlayerAttackCount");
-        float experienceBonus = Math.min(attackCount * 0.1F, 3.0F); // 最大+3ダメージ
+        float experienceBonus = Math.min(attackCount * 0.02F, 1.0F); // 0.1F → 0.02F, 3.0F → 1.0F
 
-        // 呪いボーナス
-        float curseBonus = tag.getBoolean("Cursed") ? 2.0F : 0.0F;
+        // 呪いボーナス削減
+        float curseBonus = tag.getBoolean("Cursed") ? 0.5F : 0.0F; // 2.0F → 0.5F
 
-        // 血痕ボーナス
-        float bloodBonus = tag.getBoolean("Bloodstained") ? 1.0F : 0.0F;
+        // 血痕ボーナス削減
+        float bloodBonus = tag.getBoolean("Bloodstained") ? 0.3F : 0.0F; // 1.0F → 0.3F
 
-        return baseDamage + dayBonus + experienceBonus + curseBonus + bloodBonus;
+        float totalDamage = baseDamage + dayBonus + experienceBonus + curseBonus + bloodBonus;
+        return Math.min(totalDamage, 5.0F); // 最大5ダメージ制限
     }
+
 
     /**
      * プレイヤーの近接ダメージ計算
@@ -222,24 +221,24 @@ public class TungSahurBatItem extends Item {
         CompoundTag tag = stack.getTag();
         if (tag == null) return 0.0F;
 
-        float baseDamage = BASE_ATTACK_DAMAGE;
+        float baseDamage = BASE_ATTACK_DAMAGE; // 2.0F
 
-        // 日数による強化
+        // 日数ボーナス大幅削減
         int dayNumber = tag.getInt("DayNumber");
-        float dayBonus = dayNumber * 1.5F;
+        float dayBonus = dayNumber * 0.5F; // 1.5F → 0.5F
 
-        // 使用経験による強化
+        // 経験ボーナス削減
         int attackCount = tag.getInt("PlayerAttackCount");
-        float experienceBonus = Math.min(attackCount * 0.1F, 3.0F); // 最大+3ダメージ
+        float experienceBonus = Math.min(attackCount * 0.02F, 1.0F); // 0.1F → 0.02F, 3.0F → 1.0F
 
-        // 呪いボーナス
-        float curseBonus = tag.getBoolean("Cursed") ? 2.0F : 0.0F;
+        // 特殊効果ボーナス削減
+        float curseBonus = tag.getBoolean("Cursed") ? 0.5F : 0.0F; // 2.0F → 0.5F
+        float bloodBonus = tag.getBoolean("Bloodstained") ? 0.3F : 0.0F; // 1.0F → 0.3F
 
-        // 血痕ボーナス
-        float bloodBonus = tag.getBoolean("Bloodstained") ? 1.0F : 0.0F;
-
-        return baseDamage + dayBonus + experienceBonus + curseBonus + bloodBonus;
+        float totalDamage = baseDamage + dayBonus + experienceBonus + curseBonus + bloodBonus;
+        return Math.min(totalDamage, 5.0F); // 最大5ダメージ制限
     }
+
 
     /**
      * 近接攻撃の特殊効果
@@ -250,30 +249,28 @@ public class TungSahurBatItem extends Item {
 
         RandomSource random = attacker.level().getRandom();
 
-        // 呪われたバットの特殊効果
-        if (tag.getBoolean("Cursed") && random.nextFloat() < 0.3F) {
-            // 弱体化効果
+        // 呪いの特殊効果弱体化
+        if (tag.getBoolean("Cursed") && random.nextFloat() < 0.1F) { // 0.3F → 0.1F
             target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-                    net.minecraft.world.effect.MobEffects.WEAKNESS, 100, 0));
+                    net.minecraft.world.effect.MobEffects.WEAKNESS, 40, 0)); // 100 → 40
         }
 
-        // 血まみれバットの特殊効果
-        if (tag.getBoolean("Bloodstained") && random.nextFloat() < 0.2F) {
-            // 出血効果（継続ダメージ）
+        // 血痕の特殊効果弱体化
+        if (tag.getBoolean("Bloodstained") && random.nextFloat() < 0.05F) { // 0.2F → 0.05F
             target.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-                    net.minecraft.world.effect.MobEffects.WITHER, 60, 0));
+                    net.minecraft.world.effect.MobEffects.WITHER, 20, 0)); // 60 → 20
         }
 
-        // パーティクル効果
+        // パーティクル効果削減
         if (attacker.level() instanceof ServerLevel serverLevel) {
             serverLevel.sendParticles(ParticleTypes.CRIT,
                     target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ(),
-                    5, 0.2, 0.2, 0.2, 0.1);
+                    2, 0.1, 0.1, 0.1, 0.05); // 5 → 2
 
             if (tag.getBoolean("Cursed")) {
                 serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME,
                         target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ(),
-                        3, 0.15, 0.15, 0.15, 0.05);
+                        1, 0.1, 0.1, 0.1, 0.02); // 3 → 1
             }
         }
     }
@@ -312,16 +309,15 @@ public class TungSahurBatItem extends Item {
     private void handlePlayerThrow(Level level, Player player, ItemStack stack) {
         CompoundTag tag = stack.getOrCreateTag();
 
-        // 投擲回数の記録
         int throwCount = tag.getInt("PlayerThrowCount") + 1;
         tag.putInt("PlayerThrowCount", throwCount);
         tag.putLong("LastPlayerThrow", level.getGameTime());
 
-        // 投擲回数に応じたメッセージ
-        if (throwCount == 1) {
-            player.sendSystemMessage(Component.literal("バットが手に馴染んできた...").withStyle(ChatFormatting.GRAY));
-        } else if (throwCount >= 20) {
-            player.sendSystemMessage(Component.literal("バットが意志を持っているようだ...").withStyle(ChatFormatting.DARK_RED));
+        // メッセージの閾値を上げる
+        if (throwCount == 5) { // 1 → 5
+            player.sendSystemMessage(Component.literal("バットが少し手に馴染んできた...").withStyle(ChatFormatting.GRAY));
+        } else if (throwCount >= 50) { // 20 → 50
+            player.sendSystemMessage(Component.literal("バットが微かに意志を持っているようだ...").withStyle(ChatFormatting.DARK_RED));
         }
     }
 
@@ -332,13 +328,12 @@ public class TungSahurBatItem extends Item {
         CompoundTag tag = stack.getTag();
         if (tag == null) return 1;
 
-        int power = tag.getInt("DayNumber");
-        if (tag.getBoolean("Cursed")) power += 2;
-        if (tag.getBoolean("Bloodstained")) power += 1;
+        int power = Math.min(tag.getInt("DayNumber"), 2); // 最大Day2まで制限
+        if (tag.getBoolean("Cursed")) power += 1; // 2 → 1
+        if (tag.getBoolean("Bloodstained")) power += 1; // 変更なし
 
-        return Math.min(power, 5); // 最大5
+        return Math.min(power, 3); // 最大3（5 → 3）
     }
-
     // === クールダウン管理 ===
 
     private boolean isOnThrowCooldown(ItemStack stack, Level level) {

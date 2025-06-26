@@ -54,7 +54,7 @@ public class DayCounterEvents {
     private static final long GAME_END_COOLDOWN = 10000; // 10秒のクールダウン
 
     // 対象プレイヤー設定
-    private static final String TARGET_PLAYER = "Dev";
+    private static final String TARGET_PLAYER = "karaitukemen";
 
     // サフール管理（1体厳格制限対応）
     private static final Map<Integer, Boolean> dayEntityKilled = new HashMap<>();
